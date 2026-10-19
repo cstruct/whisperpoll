@@ -50,29 +50,56 @@ pub fn PollPage(id: String, token: String) -> impl IntoView {
         <main class="page">
             <Header />
             <ErrorBanner />
+            // If the poll vanishes after we've seen it, keep showing what we
+            // have (results already verified here) with a notice on top.
+            {move || {
+                (conn.gone.get() && phase.get().is_some()).then(|| view! {
+                    <p class="banner">
+                        "The server no longer has this poll (it restarted or was updated), so this page can't change anymore. What you see is the last state."
+                    </p>
+                })
+            }}
             <Show
-                when=move || phase.get().is_some()
-                fallback=|| view! { <p class="muted center">"Connecting…"</p> }
+                when=move || !conn.gone.get() || phase.get().is_some()
+                fallback=|| view! { <PollGone /> }
             >
-                <Steps />
-                <div class="layout">
-                    <section class="stack">
-                        {move || match phase.get() {
-                            Some(Phase::Gathering) => view! { <Gathering /> }.into_any(),
-                            Some(Phase::KeyCeremony) => view! { <KeyCeremony /> }.into_any(),
-                            Some(Phase::Voting) => view! { <Voting /> }.into_any(),
-                            Some(Phase::Tallying) => view! { <Tallying /> }.into_any(),
-                            Some(Phase::Done) => view! { <Results /> }.into_any(),
-                            Some(Phase::Failed { reason }) => {
-                                view! { <div class="card error">{reason}</div> }.into_any()
-                            }
-                            None => ().into_any(),
-                        }}
-                    </section>
-                    <Participants />
-                </div>
+                <Show
+                    when=move || phase.get().is_some()
+                    fallback=|| view! { <p class="muted center">"Connecting…"</p> }
+                >
+                    <Steps />
+                    <div class="layout">
+                        <section class="stack">
+                            {move || match phase.get() {
+                                Some(Phase::Gathering) => view! { <Gathering /> }.into_any(),
+                                Some(Phase::KeyCeremony) => view! { <KeyCeremony /> }.into_any(),
+                                Some(Phase::Voting) => view! { <Voting /> }.into_any(),
+                                Some(Phase::Tallying) => view! { <Tallying /> }.into_any(),
+                                Some(Phase::Done) => view! { <Results /> }.into_any(),
+                                Some(Phase::Failed { reason }) => {
+                                    view! { <div class="card error">{reason}</div> }.into_any()
+                                }
+                                None => ().into_any(),
+                            }}
+                        </section>
+                        <Participants />
+                    </div>
+                </Show>
             </Show>
         </main>
+    }
+}
+
+#[component]
+fn PollGone() -> impl IntoView {
+    view! {
+        <div class="card stack">
+            <h2>"This poll no longer exists"</h2>
+            <p>
+                "The server doesn't know this poll or invite link. Polls are only kept in memory, so they are lost whenever the server restarts or is updated."
+            </p>
+            <p><a class="button-link" href="/">"Start a new poll"</a></p>
+        </div>
     }
 }
 
@@ -91,7 +118,13 @@ fn Header() -> impl IntoView {
                 <span class="dot" class:online=move || conn.connected.get()></span>
                 {move || {
                     let name = me();
-                    if name.is_empty() { "Connecting".to_string() } else { format!("You're {name}") }
+                    if conn.gone.get() {
+                        "Offline".to_string()
+                    } else if name.is_empty() {
+                        "Connecting".to_string()
+                    } else {
+                        format!("You're {name}")
+                    }
                 }}
             </div>
         </header>

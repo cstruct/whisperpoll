@@ -46,6 +46,7 @@ async fn main() {
     let static_files = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
     let app = Router::new()
         .route("/api/polls", post(create_poll))
+        .route("/api/polls/{id}/check", get(check))
         .route("/ws/{id}", get(connect))
         .fallback_service(static_files)
         .with_state(AppState::default());
@@ -80,6 +81,20 @@ async fn create_poll(
 #[derive(Deserialize)]
 struct Join {
     t: String,
+}
+
+/// Whether `id` is a poll the server knows and `t` one of its invites. The
+/// client asks this when its websocket fails, since browsers hide the 404.
+async fn check(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(join): Query<Join>,
+) -> StatusCode {
+    let polls = state.polls.lock().unwrap();
+    match polls.get(&id).and_then(|e| e.room.member_by_token(&join.t)) {
+        Some(_) => StatusCode::NO_CONTENT,
+        None => StatusCode::NOT_FOUND,
+    }
 }
 
 async fn connect(
