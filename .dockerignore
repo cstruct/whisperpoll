@@ -2,3 +2,10 @@ target
 crates/web/dist
 .git
 .claude
+.DS_Store
+**/.DS_Store
+
+# The Flutter app isn't part of the server image (its build output alone is
+# hundreds of MB), but app/rust is a Cargo workspace member, so keep it.
+app/*
+!app/rust
