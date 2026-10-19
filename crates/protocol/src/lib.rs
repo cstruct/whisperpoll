@@ -8,8 +8,9 @@
 //!
 //! A poll moves through these phases:
 //!
-//! 1. [`Phase::Gathering`] — the creator invites people; everyone suggests
-//!    dates; each browser registers a trustee key as soon as it connects.
+//! 1. [`Phase::Inviting`] — the creator invites people; each device
+//!    registers a trustee key as soon as it connects.
+//!    [`Phase::Gathering`] — everyone suggests times.
 //! 2. [`Phase::KeyCeremony`] — the creator locks the dates and starts the
 //!    distributed key generation; browsers deal and check shares on their own.
 //! 3. [`Phase::Voting`] — everyone files a tiered ballot under the joint key.
@@ -55,12 +56,17 @@ pub struct Created {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
+    /// The creator invites people; invitees' devices register keys.
+    Inviting,
+    /// Everyone suggests times.
     Gathering,
     KeyCeremony,
     Voting,
     Tallying,
     Done,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -160,6 +166,8 @@ pub enum ClientMsg {
     /// Keep the ballot carried over from the previous round as is.
     KeepVote,
     CloseVoting,
+    /// The creator is done inviting: move on to suggesting times.
+    FinishInviting,
     Partial(PartialDecryption),
     /// A device that should get push notifications for this participant
     /// when they're offline and needed.

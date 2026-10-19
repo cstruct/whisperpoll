@@ -143,6 +143,7 @@ class _PollScreenState extends State<PollScreen> {
         _Steps(view.phase),
         const SizedBox(height: 8),
         ...switch (view.phase) {
+          Phase.inviting => _inviting(s),
           Phase.gathering => _gathering(s),
           Phase.keyCeremony => [_KeyCeremony(s)],
           Phase.voting => [..._finishedRounds(s, open: false), _Voting(s, key: ValueKey(view.rounds.length))],
@@ -155,14 +156,66 @@ class _PollScreenState extends State<PollScreen> {
     );
   }
 
+  static const _keyHint = _Hint(
+    "Your part of the poll's key is kept on this phone. Opening your link somewhere else moves "
+    "it there, which is fine until voting opens. After that, this phone is the one that can "
+    'help reveal the result.',
+  );
+
+  /// The first step: the creator invites people, then moves everyone on to
+  /// suggesting times. Invitees who open their link meanwhile join and wait.
+  List<Widget> _inviting(_Ctx s) {
+    final creator = s.view.participants.firstWhere((p) => p.creator).name;
+    if (!s.view.isCreator) {
+      return [
+        _Card(
+          title: '$creator is inviting people',
+          child: const Text('Next, everyone suggests times that could work. This screen moves on by itself.'),
+        ),
+        _keyHint,
+      ];
+    }
+    final joined = s.view.participants.where((p) => !p.creator && p.registered).length;
+    final opened = switch (joined) {
+      0 => 'Nobody has opened their link yet',
+      1 => '1 person has opened their link',
+      _ => '$joined people have opened their links',
+    };
+    return [
+      _Invites(s),
+      _Card(
+        title: 'Done inviting?',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('$opened. Next, everyone suggests times that could work; you can still invite people then.'),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () => s.conn.send('FinishInviting'),
+              child: const Text('Next: suggest times'),
+            ),
+          ],
+        ),
+      ),
+      _keyHint,
+    ];
+  }
+
   List<Widget> _gathering(_Ctx s) => [
         _Dates(s),
-        const _Hint(
-          "Your part of the poll's key is kept on this phone. Opening your link somewhere else moves "
-          "it there, which is fine until voting opens. After that, this phone is the one that can "
-          'help reveal the result.',
-        ),
-        if (s.view.isCreator) ...[_Invites(s), _Start(s)] else
+        _keyHint,
+        if (s.view.isCreator) ...[
+          _Start(s),
+          // Someone usually gets forgotten.
+          Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: ExpansionTile(
+              title: const Text('Invite more people'),
+              childrenPadding: EdgeInsets.zero,
+              children: [_Invites(s)],
+            ),
+          ),
+        ] else
           _Card(child: Text(
             'Waiting for ${s.view.participants.firstWhere((p) => p.creator).name} to lock the times '
             'and open voting.',
@@ -263,15 +316,16 @@ class _Steps extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final current = switch (phase) {
-      Phase.gathering => 0,
+      Phase.inviting => 0,
+      Phase.gathering => 1,
       // Creating the key is part of opening the vote, not a step of its own.
-      Phase.keyCeremony || Phase.voting => 1,
-      _ => 2,
+      Phase.keyCeremony || Phase.voting => 2,
+      _ => 3,
     };
     final scheme = Theme.of(context).colorScheme;
     return Row(
       children: [
-        for (final (i, label) in ['Invite & times', 'Vote', 'Result'].indexed)
+        for (final (i, label) in ['Invite', 'Times', 'Vote', 'Result'].indexed)
           Expanded(
             child: Container(
               padding: const EdgeInsets.only(bottom: 8),
@@ -1073,8 +1127,8 @@ class _People extends StatelessWidget {
     final c = view.ceremony;
     final j = c?.trustees.indexOf(i) ?? -1;
     switch (view.phase) {
-      case Phase.gathering:
-        return p.registered ? 'has a key' : 'not joined yet';
+      case Phase.inviting || Phase.gathering:
+        return p.registered ? 'joined' : 'not joined yet';
       case Phase.keyCeremony when j >= 0:
         if (c!.checked[j]) return 'ready';
         if (c.dealtBy.contains(j + 1) && !c.allDealt) return 'waiting for others';

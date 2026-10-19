@@ -4,7 +4,7 @@
 
 const tiers = ['Prefer', 'OK', 'If needed'];
 
-enum Phase { gathering, keyCeremony, voting, tallying, done, failed }
+enum Phase { inviting, gathering, keyCeremony, voting, tallying, done, failed }
 
 class Participant {
   Participant(Map<String, dynamic> j)
@@ -72,6 +72,7 @@ class PollView {
   Phase get phase {
     final p = json['phase'];
     return switch (p) {
+      'Inviting' => Phase.inviting,
       'Gathering' => Phase.gathering,
       'KeyCeremony' => Phase.keyCeremony,
       'Voting' => Phase.voting,

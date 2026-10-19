@@ -39,7 +39,11 @@ pub fn next_step(
         .registration
         .as_ref()
         .is_some_and(|r| r.key_bytes() == me.public_bytes());
-    if matches!(view.phase, Phase::Gathering | Phase::KeyCeremony) && !registered_here {
+    let before_voting = matches!(
+        view.phase,
+        Phase::Inviting | Phase::Gathering | Phase::KeyCeremony
+    );
+    if before_voting && !registered_here {
         let key = fresh("register".into())?;
         let msg = ClientMsg::Register(me.register(&view.id, rng));
         return Some(Step { key, msg });

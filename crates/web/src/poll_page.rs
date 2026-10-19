@@ -73,6 +73,7 @@ pub fn PollPage(id: String, token: String) -> impl IntoView {
                     <div class="layout">
                         <section class="stack">
                             {move || match phase.get() {
+                                Some(Phase::Inviting) => view! { <Inviting /> }.into_any(),
                                 Some(Phase::Gathering) => view! { <Gathering /> }.into_any(),
                                 Some(Phase::KeyCeremony) => view! { <KeyCeremony /> }.into_any(),
                                 Some(Phase::Voting) => view! { <Voting /> }.into_any(),
@@ -155,13 +156,14 @@ fn Steps() -> impl IntoView {
     let conn = session().conn;
     let current = move || {
         read(conn, 0, |v| match v.phase {
-            Phase::Gathering => 0,
+            Phase::Inviting => 0,
+            Phase::Gathering => 1,
             // Creating the key is part of opening the vote, not a step of its own.
-            Phase::KeyCeremony | Phase::Voting => 1,
-            Phase::Tallying | Phase::Done | Phase::Failed { .. } => 2,
+            Phase::KeyCeremony | Phase::Voting => 2,
+            Phase::Tallying | Phase::Done | Phase::Failed { .. } => 3,
         })
     };
-    let steps = ["Invite & times", "Vote", "Result"];
+    let steps = ["Invite", "Times", "Vote", "Result"];
     view! {
         <ol class="steps">
             {steps
@@ -195,8 +197,10 @@ fn Participants() -> impl IntoView {
                 .enumerate()
                 .map(|(i, p)| {
                     let status = match (&v.phase, trustee(i)) {
-                        (Phase::Gathering, _) if p.registration.is_some() => "has a key",
-                        (Phase::Gathering, _) => "not joined yet",
+                        (Phase::Inviting | Phase::Gathering, _) if p.registration.is_some() => {
+                            "joined"
+                        }
+                        (Phase::Inviting | Phase::Gathering, _) => "not joined yet",
                         (Phase::KeyCeremony, Some(j)) => {
                             let c = v.ceremony.as_ref().unwrap();
                             let dealt = c.dealings.iter().any(|d| d.dealer as usize == j + 1);
@@ -224,7 +228,9 @@ fn Participants() -> impl IntoView {
                                 ""
                             }
                         }
-                        (_, None) if !matches!(v.phase, Phase::Gathering) => "not a trustee",
+                        (_, None) if !matches!(v.phase, Phase::Inviting | Phase::Gathering) => {
+                            "not a trustee"
+                        }
                         _ => "",
                     };
                     (p.name.clone(), p.creator, p.online, i == v.me, status)
@@ -370,9 +376,74 @@ fn Gathering() -> impl IntoView {
                 }
             }
         >
-            <Invites />
             <StartCeremony />
+            // Someone usually gets forgotten.
+            <details class="invite-more">
+                <summary>"Invite more people"</summary>
+                <Invites />
+            </details>
         </Show>
+    }
+}
+
+/// The first step: the creator invites people, then moves everyone on to
+/// suggesting times. Invitees who open their link meanwhile join (their
+/// browser registers its key) and wait.
+#[component]
+fn Inviting() -> impl IntoView {
+    let conn = session().conn;
+    let is_creator = move || read(conn, false, PollView::is_creator);
+    let creator_name = move || {
+        read(conn, String::new(), |v| {
+            v.participants
+                .iter()
+                .find(|p| p.creator)
+                .map(|p| p.name.clone())
+                .unwrap_or_default()
+        })
+    };
+    let joined = move || {
+        read(conn, 0, |v| {
+            v.participants
+                .iter()
+                .filter(|p| !p.creator && p.registration.is_some())
+                .count()
+        })
+    };
+    view! {
+        <Show
+            when=is_creator
+            fallback=move || {
+                view! {
+                    <div class="card stack">
+                        <h2>{move || format!("{} is inviting people", creator_name())}</h2>
+                        <p class="muted">"Next, everyone suggests times that could work. This page moves on by itself."</p>
+                    </div>
+                }
+            }
+        >
+            <Invites />
+            <div class="card stack">
+                <h2>"Done inviting?"</h2>
+                <p class="muted">
+                    {move || {
+                        let n = joined();
+                        let opened = match n {
+                            0 => "Nobody has opened their link yet".to_string(),
+                            1 => "1 person has opened their link".to_string(),
+                            n => format!("{n} people have opened their links"),
+                        };
+                        format!("{opened}. Next, everyone suggests times that could work; you can still invite people then.")
+                    }}
+                </p>
+                <button on:click=move |_| net::send(&ClientMsg::FinishInviting)>
+                    "Next: suggest times"
+                </button>
+            </div>
+        </Show>
+        <p class="hint">
+            "Your part of the poll's key is kept in this browser. Opening your link in another browser moves it there, which is fine until voting opens. After that, this is the browser that can help reveal the result."
+        </p>
     }
 }
 

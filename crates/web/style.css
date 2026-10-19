@@ -291,7 +291,7 @@ progress {
   padding: 0;
   margin: 0 0 20px;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 
@@ -561,6 +561,17 @@ details.round[open] > .stack {
 
 .button-link:hover {
   text-decoration: underline;
+}
+
+details.invite-more > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 4px 0;
+}
+
+details.invite-more[open] > summary {
+  margin-bottom: 12px;
 }
 
 .picked {

@@ -26,6 +26,7 @@ const MAX_DEVICES: usize = 5;
 /// once per need, and only while they're offline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Need {
+    SuggestTimes,
     Deal { attempt: u32 },
     Check { attempt: u32 },
     Vote { round: usize },
@@ -117,7 +118,7 @@ impl Room {
         let room = Room {
             id,
             title: clean_name(title, MAX_TITLE)?,
-            phase: Phase::Gathering,
+            phase: Phase::Inviting,
             members: vec![Member {
                 name: clean_name(creator, MAX_NAME)?,
                 token: token.clone(),
@@ -198,6 +199,12 @@ impl Room {
             } => self.checked(who, attempt, complaints),
             ClientMsg::Vote(ballot) => self.vote(who, ballot),
             ClientMsg::KeepVote => self.keep_vote(who),
+            ClientMsg::FinishInviting => {
+                self.require_creator(who)?;
+                self.require_phase(Phase::Inviting)?;
+                self.phase = Phase::Gathering;
+                Ok(())
+            }
             ClientMsg::CloseVoting => {
                 self.require_creator(who)?;
                 self.require_phase(Phase::Voting)?;
@@ -225,7 +232,10 @@ impl Room {
     /// That's allowed until voting opens: during the key ceremony it restarts
     /// the ceremony, which is harmless as nothing is encrypted yet.
     fn register(&mut self, who: usize, reg: Registration) -> Result<(), String> {
-        if !matches!(self.phase, Phase::Gathering | Phase::KeyCeremony) {
+        if !matches!(
+            self.phase,
+            Phase::Inviting | Phase::Gathering | Phase::KeyCeremony
+        ) {
             return Err("trustee keys are fixed once voting opens".into());
         }
         if !reg.verify(&self.id) {
@@ -273,7 +283,10 @@ impl Room {
 
     fn invite(&mut self, who: usize, name: &str) -> Result<(), String> {
         self.require_creator(who)?;
-        if !matches!(self.phase, Phase::Gathering | Phase::Voting) {
+        if !matches!(
+            self.phase,
+            Phase::Inviting | Phase::Gathering | Phase::Voting
+        ) {
             return Err("invites are closed".into());
         }
         if self.members.len() >= MAX_PARTICIPANTS {
@@ -513,6 +526,8 @@ impl Room {
     fn need(&self, who: usize) -> Option<Need> {
         let trustee = self.trustee_index(who).map(|j| j as usize - 1);
         match self.phase {
+            // The creator moved the poll on themselves; everyone else hears of it.
+            Phase::Gathering if !self.members[who].creator => Some(Need::SuggestTimes),
             Phase::KeyCeremony => {
                 let (k, j) = (self.key.as_ref()?, trustee?);
                 let attempt = k.attempt;
@@ -544,6 +559,10 @@ impl Room {
     fn push_for(&self, need: Need) -> Push {
         let days = self.days;
         let (body, wake) = match need {
+            Need::SuggestTimes => (
+                "Everyone's invited. Suggest times that work for you.".to_string(),
+                false,
+            ),
             Need::Deal { .. } | Need::Check { .. } => (
                 "Your phone is needed for a moment to set up the poll's key.".to_string(),
                 true,
@@ -695,8 +714,14 @@ mod tests {
         let ids: Vec<_> = (0..3)
             .map(|_| TrusteeIdentity::generate(&mut OsRng))
             .collect();
-        // Each client registers its key on its own.
+        // Each client registers its key on its own while alice invites.
         settle(&mut room, &ids);
+        let early = ClientMsg::SuggestSlot {
+            slot: "2026-10-25T18:00+02:00/120".into(),
+        };
+        assert!(room.apply(1, early).is_err(), "times come after inviting");
+        assert!(room.apply(1, ClientMsg::FinishInviting).is_err());
+        room.apply(0, ClientMsg::FinishInviting).unwrap();
         for slot in [
             "2026-10-25T18:00+02:00/120",
             "2026-10-24T18:00+02:00/120",
@@ -884,6 +909,7 @@ mod tests {
         let register = |id: &TrusteeIdentity| ClientMsg::Register(id.register("p1", &mut OsRng));
         room.apply(0, register(&alice)).unwrap();
         room.apply(1, register(&bob_chat_app)).unwrap();
+        room.apply(0, ClientMsg::FinishInviting).unwrap();
         let slot = ClientMsg::SuggestSlot {
             slot: "2026-10-24T18:00+02:00/120".into(),
         };
@@ -937,6 +963,26 @@ mod tests {
     }
 
     #[test]
+    fn moving_on_to_times_pushes_to_invitees() {
+        let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
+        room.apply(0, ClientMsg::Invite { name: "bob".into() })
+            .unwrap();
+        let device = ClientMsg::RegisterDevice {
+            platform: whisperpoll_protocol::PushPlatform::Apns,
+            token: "b0b".into(),
+        };
+        room.apply(1, device).unwrap();
+        assert!(
+            room.pushes().is_empty(),
+            "nothing to do while alice invites"
+        );
+        room.apply(0, ClientMsg::FinishInviting).unwrap();
+        let pushes = room.pushes();
+        assert_eq!(pushes.len(), 1);
+        assert!(pushes[0].1.body.contains("Suggest times"));
+    }
+
+    #[test]
     fn pushes_go_to_offline_participants_once_per_need() {
         let (mut room, ids) = setup(1);
         let device = |token: &str| ClientMsg::RegisterDevice {
@@ -982,6 +1028,7 @@ mod tests {
     #[test]
     fn slots_are_canonical_and_sorted_by_instant() {
         let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
+        room.apply(0, ClientMsg::FinishInviting).unwrap();
         let suggest = |room: &mut Room, s: &str| {
             room.apply(0, ClientMsg::SuggestSlot { slot: s.into() })
                 .unwrap()
@@ -1014,6 +1061,8 @@ mod tests {
         let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
         let slot = |s: &str| ClientMsg::SuggestSlot { slot: s.into() };
         let start = |days| ClientMsg::StartCeremony { threshold: 1, days };
+        room.apply(0, ClientMsg::FinishInviting).unwrap();
+        assert!(room.apply(0, ClientMsg::FinishInviting).is_err());
         assert!(room.apply(0, slot("tomorrow")).is_err());
         assert!(room.apply(0, slot("2026-10-24")).is_err());
         assert!(room.apply(0, slot("2026-10-24T18:00+02:00/5")).is_err());
