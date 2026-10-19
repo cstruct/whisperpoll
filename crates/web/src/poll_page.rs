@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use leptos::ev::SubmitEvent;
 use leptos::prelude::*;
 use rand_core::OsRng;
@@ -118,12 +120,12 @@ fn Steps() -> impl IntoView {
     let current = move || {
         read(conn, 0, |v| match v.phase {
             Phase::Gathering => 0,
-            Phase::KeyCeremony => 1,
-            Phase::Voting => 2,
-            Phase::Tallying | Phase::Done | Phase::Failed { .. } => 3,
+            // Creating the key is part of opening the vote, not a step of its own.
+            Phase::KeyCeremony | Phase::Voting => 1,
+            Phase::Tallying | Phase::Done | Phase::Failed { .. } => 2,
         })
     };
-    let steps = ["Invite & dates", "Shared key", "Vote", "Result"];
+    let steps = ["Invite & dates", "Vote", "Result"];
     view! {
         <ol class="steps">
             {steps
@@ -161,12 +163,16 @@ fn Participants() -> impl IntoView {
                         (Phase::Gathering, _) => "not joined yet",
                         (Phase::KeyCeremony, Some(j)) => {
                             let c = v.ceremony.as_ref().unwrap();
+                            let dealt = c.dealings.iter().any(|d| d.dealer as usize == j + 1);
+                            let all_dealt = c.dealings.len() == c.trustees.len();
                             if c.checked[j] {
-                                "key ready"
-                            } else if c.dealings.iter().any(|d| d.dealer as usize == j + 1) {
-                                "shares sent"
+                                "ready"
+                            } else if dealt && !all_dealt {
+                                "waiting for others"
+                            } else if p.online {
+                                "setting up…"
                             } else {
-                                "creating key…"
+                                "needs to open their link"
                             }
                         }
                         (Phase::Voting, _) if p.voted => "voted",
@@ -243,7 +249,7 @@ fn Gathering() -> impl IntoView {
     view! {
         <div class="card stack">
             <h2>"Suggest dates"</h2>
-            <p class="muted">"Anyone can add a day. The list is locked when the key is created."</p>
+            <p class="muted">"Anyone can add a day. The list is locked when voting opens."</p>
             <ul class="dates">
                 {move || {
                     let ds = dates();
@@ -404,10 +410,10 @@ fn StartCeremony() -> impl IntoView {
 
     view! {
         <div class="card stack">
-            <h2>"Lock dates & create the shared key"</h2>
+            <h2>"Lock dates & open voting"</h2>
             <p class="muted">
                 {move || format!(
-                    "Everyone who has opened their link ({} so far) becomes a trustee. Their browsers create a key together that none of them holds alone.",
+                    "Everyone who has opened their link ({} so far) becomes a trustee: their browsers create the poll's key together, so no single person can unlock a ballot. That needs their pages open for a moment after you lock the dates.",
                     registered(),
                 )}
             </p>
@@ -453,66 +459,94 @@ fn StartCeremony() -> impl IntoView {
                 }}
             </p>
             <button on:click=start disabled=move || !has_dates() || registered() == 0>
-                "Lock dates & create key"
+                "Lock dates & open voting"
             </button>
         </div>
     }
 }
 
+/// Creating the key normally takes a split second, so this only appears if
+/// it's slow — which means a trustee's page isn't open — and says who
+/// everyone is waiting for.
 #[component]
 fn KeyCeremony() -> impl IntoView {
     let s = session();
     let conn = s.conn;
     let (id, token) = (s.id.clone(), s.token.clone());
-    let progress = move || {
-        read(conn, (0, 0, 0, 0), |v| {
+    let slow = RwSignal::new(false);
+    set_timeout(
+        move || {
+            slow.try_set(true);
+        },
+        Duration::from_millis(1500),
+    );
+    let waiting = move || {
+        read(conn, Vec::new(), |v| {
             let c = v.ceremony.as_ref().unwrap();
-            let n = c.trustees.len();
-            (
-                c.dealings.len(),
-                c.checked.iter().filter(|&&d| d).count(),
-                n,
-                c.threshold,
-            )
+            let all_dealt = c.dealings.len() == c.trustees.len();
+            c.trustees
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| {
+                    if all_dealt {
+                        !c.checked[j]
+                    } else {
+                        !c.dealings.iter().any(|d| d.dealer as usize == j + 1)
+                    }
+                })
+                .map(|(_, &p)| {
+                    let who = &v.participants[p];
+                    (who.name.clone(), who.online, p == v.me)
+                })
+                .collect::<Vec<_>>()
         })
     };
-    let am_trustee = move || {
+    let am_trustee = Memo::new(move |_| {
         read(conn, false, |v| {
             v.ceremony()
                 .is_some_and(|c| c.index_of(&store::identity(&id, &token)).is_some())
         })
-    };
-    view! {
-        <div class="card stack">
-            <h2>"Creating the shared key"</h2>
-            <p>
-                "Each trustee's browser splits a secret of its own and sends everyone an encrypted share. "
-                "The poll key is the sum of all of them — nobody ever sees it whole."
-            </p>
-            {move || {
-                let (dealt, checked, n, t) = progress();
-                view! {
-                    <div class="meter-row">
-                        <span>"Shares sent"</span>
-                        <progress max=n value=dealt></progress>
-                        <span class="muted">{format!("{dealt}/{n}")}</span>
-                    </div>
-                    <div class="meter-row">
-                        <span>"Shares checked"</span>
-                        <progress max=n value=checked></progress>
-                        <span class="muted">{format!("{checked}/{n}")}</span>
-                    </div>
-                    <p class="muted">{format!("Any {t} of the {n} trustees will be able to reveal the result.")}</p>
-                }
-            }}
-            <p class="hint">
-                {move || if am_trustee() {
-                    "Your browser does its part automatically — keep this tab open until the key is ready."
-                } else {
-                    "You're not a trustee (you joined after the key was started, or from another browser). You can still vote."
-                }}
-            </p>
-        </div>
+    });
+    move || {
+        slow.get().then(|| {
+            view! {
+                <div class="card stack">
+                    <h2>"Preparing the ballot box"</h2>
+                    <p>
+                        "Before anyone votes, everyone's browsers create the poll's key together, so no single person can unlock a ballot. "
+                        "It takes a moment once everyone's page is open."
+                    </p>
+                    <ul class="waiting">
+                        {move || {
+                            waiting()
+                                .into_iter()
+                                .map(|(name, online, me)| {
+                                    let status = match (me, online) {
+                                        (true, _) => "you — keep this tab open",
+                                        (false, true) => "page open, setting up…",
+                                        (false, false) => "needs to open their link",
+                                    };
+                                    view! {
+                                        <li>
+                                            <span class="dot" class:online=online></span>
+                                            <strong>{name}</strong>
+                                            <span class="muted">{status}</span>
+                                        </li>
+                                    }
+                                })
+                                .collect_view()
+                        }}
+                    </ul>
+                    <p class="hint">
+                        {move || if am_trustee.get() {
+                            "Voting opens by itself as soon as everyone's browser has done its part."
+                        } else {
+                            "You're not a trustee (you joined after the dates were locked, or from another browser). You can still vote once it's ready."
+                        }}
+                    </p>
+                </div>
+            }
+        })
     }
 }
 

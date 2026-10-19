@@ -291,7 +291,7 @@ progress {
   padding: 0;
   margin: 0 0 20px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
@@ -340,6 +340,7 @@ progress {
 }
 
 .people ul,
+.waiting,
 .dates,
 .invites {
   list-style: none;
@@ -376,6 +377,13 @@ progress {
   border-radius: 4px;
   padding: 1px 5px;
   margin-left: 6px;
+}
+
+.waiting li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
 }
 
 .dates li {
@@ -554,10 +562,6 @@ details.round[open] > .stack {
 @media (max-width: 720px) {
   .layout {
     grid-template-columns: 1fr;
-  }
-
-  .steps {
-    grid-template-columns: repeat(2, 1fr);
   }
 
   .invites li {
