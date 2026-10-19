@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use rand_core::OsRng;
 use web_sys::HtmlInputElement;
 use whisperpoll_core::{cast_tiered_ballot, verify_tally, TieredResult};
-use whisperpoll_protocol::{ClientMsg, Phase, PollView, TIERS};
+use whisperpoll_protocol::{round_winner, ClientMsg, Phase, PollView, TIERS};
 
 use crate::net::{self, Conn};
 use crate::{auto, store, util};
@@ -170,9 +170,11 @@ fn Participants() -> impl IntoView {
                             }
                         }
                         (Phase::Voting, _) if p.voted => "voted",
+                        (Phase::Voting, _) if p.has_ballot => "deciding to keep or update",
                         (Phase::Voting, _) => "not voted",
                         (Phase::Tallying | Phase::Done, Some(j)) => {
-                            if v.partials.iter().any(|q| q.trustee as usize == j + 1) {
+                            let partials = v.rounds.last().map(|r| &r.partials[..]).unwrap_or(&[]);
+                            if partials.iter().any(|q| q.trustee as usize == j + 1) {
                                 "decrypted"
                             } else if v.phase == Phase::Tallying {
                                 "decrypting…"
@@ -369,6 +371,8 @@ fn StartCeremony() -> impl IntoView {
         })
     };
     let has_dates = move || read(conn, false, |v| !v.dates.is_empty());
+    let date_count = move || read(conn, 0, |v| v.dates.len());
+    let days = RwSignal::new(1usize);
     let chosen = RwSignal::new(0usize);
     let threshold = move || {
         let n = registered();
@@ -394,6 +398,7 @@ fn StartCeremony() -> impl IntoView {
     let start = move |_| {
         net::send(&ClientMsg::StartCeremony {
             threshold: threshold(),
+            days: days.get().clamp(1, date_count().max(1)),
         })
     };
 
@@ -424,6 +429,29 @@ fn StartCeremony() -> impl IntoView {
                 </select>
             </label>
             <p class="hint">{hint}</p>
+            <label class="field inline">
+                <span>"Days to find"</span>
+                <select on:change=move |ev| days.set(event_target_value(&ev).parse().unwrap_or(1))>
+                    {move || {
+                        (1..=date_count().max(1))
+                            .map(|d| {
+                                view! {
+                                    <option value=d.to_string() prop:selected=move || days.get() == d>
+                                        {if d == 1 { "1 day".to_string() } else { format!("{d} days") }}
+                                    </option>
+                                }
+                            })
+                            .collect_view()
+                    }}
+                </select>
+            </label>
+            <p class="hint">
+                {move || if days.get() > 1 {
+                    "Days are picked one at a time. After each pick, everyone can update their vote for the next one, or keep it."
+                } else {
+                    "Need more than one meeting? Days are then picked one at a time."
+                }}
+            </p>
             <button on:click=start disabled=move || !has_dates() || registered() == 0>
                 "Lock dates & create key"
             </button>
@@ -488,15 +516,43 @@ fn KeyCeremony() -> impl IntoView {
     }
 }
 
+fn day_list(options: &[String], picked: &[usize]) -> String {
+    picked
+        .iter()
+        .map(|&o| util::pretty_date(&options[o]))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[component]
 fn Voting() -> impl IntoView {
     let s = session();
     let conn = s.conn;
-    let options = conn
-        .state
-        .with_untracked(|st| st.as_ref().map(|v| v.options.clone()).unwrap_or_default());
-    let choices = RwSignal::new(vec![None::<usize>; options.len()]);
-    let voted = move || read(conn, false, |v| v.participants[v.me].voted);
+    let ids = StoredValue::new((s.id.clone(), s.token.clone()));
+    let (options, round, days, picked) = conn.state.with_untracked(|st| {
+        st.as_ref()
+            .map(|v| (v.options.clone(), v.rounds.len(), v.days, v.picked()))
+            .unwrap_or_default()
+    });
+
+    // Later rounds start from your last vote; picked days can't win again.
+    let remembered = ids
+        .with_value(|(id, token)| store::choices(id, token))
+        .filter(|c| round > 1 && c.len() == options.len())
+        .unwrap_or_else(|| vec![None; options.len()]);
+    let initial: Vec<Option<usize>> = remembered
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| if picked.contains(&i) { None } else { c })
+        .collect();
+    let choices = RwSignal::new(initial);
+    let editing = RwSignal::new(false);
+    let mine = Memo::new(move |_| {
+        read(conn, (false, false), |v| {
+            let p = &v.participants[v.me];
+            (p.has_ballot, p.voted)
+        })
+    });
     let progress = move || {
         read(conn, (0, 0), |v| {
             (
@@ -506,15 +562,11 @@ fn Voting() -> impl IntoView {
         })
     };
     let is_creator = move || read(conn, false, PollView::is_creator);
-    let ids = StoredValue::new((s.id.clone(), s.token.clone()));
-    let (id, token) = (s.id.clone(), s.token.clone());
-    let receipt = {
-        let (id, token) = (id.clone(), token.clone());
-        move || {
-            // Re-read on every state change so it appears right after voting.
-            conn.state.track();
-            store::receipt(&id, &token).map(|r| util::to_hex(&r.0)[..16].to_string())
-        }
+    let receipt = move || {
+        // Re-read on every state change so it appears right after voting.
+        conn.state.track();
+        ids.with_value(|(id, token)| store::receipt_for(id, token, round))
+            .map(|r| util::to_hex(&r.0)[..16].to_string())
     };
 
     let submit = move |_| {
@@ -525,81 +577,155 @@ fn Voting() -> impl IntoView {
             conn.error.set(Some("the poll key isn't ready yet".into()));
             return;
         };
-        match cast_tiered_ballot(&poll, &choices.get_untracked(), &mut OsRng) {
+        let picks = choices.get_untracked();
+        match cast_tiered_ballot(&poll, &picks, &mut OsRng) {
             Ok(ballot) => {
-                ids.with_value(|(id, token)| store::save_receipt(id, token, &ballot.receipt()));
+                ids.with_value(|(id, token)| {
+                    store::save_receipt(id, token, round, &ballot.receipt());
+                    store::save_choices(id, token, &picks);
+                });
                 net::send(&ClientMsg::Vote(ballot));
+                editing.set(false);
             }
             Err(e) => conn.error.set(Some(e.to_string())),
         }
     };
+    let keep = move |_| net::send(&ClientMsg::KeepVote);
 
-    let rows = options
-        .iter()
-        .enumerate()
-        .map(|(i, date)| {
-            let buttons = (0..=TIERS.len())
-                .map(|t| {
-                    let value = (t < TIERS.len()).then_some(t);
-                    let label = TIERS.get(t).copied().unwrap_or("Can't");
+    let taken = day_list(&options, &picked);
+    let heading = if days > 1 {
+        format!("Day {round} of {days}: how well does each day work for you?")
+    } else {
+        "How well does each day work for you?".to_string()
+    };
+
+    let form = {
+        let (options, picked) = (options.clone(), picked.clone());
+        move || {
+            let rows = options
+                .iter()
+                .enumerate()
+                .map(|(i, date)| {
+                    let control = if let Some(k) = picked.iter().position(|&p| p == i) {
+                        view! { <span class="muted">{format!("Picked for day {}", k + 1)}</span> }
+                            .into_any()
+                    } else {
+                        let buttons = (0..=TIERS.len())
+                            .map(|t| {
+                                let value = (t < TIERS.len()).then_some(t);
+                                let label = TIERS.get(t).copied().unwrap_or("Can't");
+                                view! {
+                                    <button
+                                        type="button"
+                                        class:on=move || choices.with(|c| c[i] == value)
+                                        class:cant=value.is_none()
+                                        on:click=move |_| choices.update(|c| c[i] = value)
+                                    >
+                                        {label}
+                                    </button>
+                                }
+                            })
+                            .collect_view();
+                        view! { <div class="seg">{buttons}</div> }.into_any()
+                    };
                     view! {
-                        <button
-                            type="button"
-                            class:on=move || choices.with(|c| c[i] == value)
-                            class:cant=value.is_none()
-                            on:click=move |_| choices.update(|c| c[i] = value)
-                        >
-                            {label}
-                        </button>
+                        <div class="ballot-row" class:taken=picked.contains(&i)>
+                            <span class="date">{util::pretty_date(date)}</span>
+                            {control}
+                        </div>
                     }
                 })
                 .collect_view();
             view! {
-                <div class="ballot-row">
-                    <span class="date">{util::pretty_date(date)}</span>
-                    <div class="seg">{buttons}</div>
+                <div class="card stack">
+                    <h2>{heading.clone()}</h2>
+                    <p class="muted">
+                        "Your choices are encrypted here, with proofs that they're well-formed. Nobody — not the server, not any single trustee — can read them."
+                    </p>
+                    <div class="ballot">{rows}</div>
+                    <div class="row">
+                        <button on:click=submit>"Cast encrypted vote"</button>
+                        <Show when=move || editing.get()>
+                            <button class="secondary" on:click=move |_| editing.set(false)>
+                                "Cancel"
+                            </button>
+                        </Show>
+                    </div>
                 </div>
             }
-        })
-        .collect_view();
+        }
+    };
+
+    let body = move || {
+        let (has_ballot, voted) = mine.get();
+        if editing.get() || (!has_ballot && !voted) {
+            form().into_any()
+        } else if voted {
+            view! {
+                <div class="card stack">
+                    <h2>
+                        {if days > 1 {
+                            format!("You're set for day {round}")
+                        } else {
+                            "Your vote is in".to_string()
+                        }}
+                    </h2>
+                    <p>
+                        "It was encrypted in this browser before it was sent. Your receipt: "
+                        <code>{receipt}</code>
+                    </p>
+                    <p class="muted">"You can still change it until voting closes."</p>
+                    <div class="row">
+                        <button class="secondary" on:click=move |_| editing.set(true)>
+                            "Change my vote"
+                        </button>
+                    </div>
+                </div>
+            }
+            .into_any()
+        } else {
+            view! {
+                <div class="card stack">
+                    <h2>{format!("Day {round} of {days}")}</h2>
+                    <p>
+                        {format!(
+                            "Your vote from the last round still counts. Keep it, or update it now that {} is taken.",
+                            taken,
+                        )}
+                    </p>
+                    <div class="row">
+                        <button on:click=keep>"Keep my votes"</button>
+                        <button class="secondary" on:click=move |_| editing.set(true)>
+                            "Update my votes"
+                        </button>
+                    </div>
+                </div>
+            }
+            .into_any()
+        }
+    };
 
     view! {
-        <Show
-            when=move || !voted()
-            fallback=move || {
-                view! {
-                    <div class="card stack">
-                        <h2>"Your vote is in"</h2>
-                        <p>
-                            "It was encrypted in this browser before it was sent. Your receipt: "
-                            <code>{receipt.clone()}</code>
-                        </p>
-                        <p class="muted">"Once the result is out, you'll see whether your ballot was counted."</p>
-                    </div>
-                }
-            }
-        >
-            <div class="card stack">
-                <h2>"How well does each day work for you?"</h2>
-                <p class="muted">
-                    "Your choices are encrypted here, with proofs that they're well-formed. Nobody — not the server, not any single trustee — can read them."
-                </p>
-                <div class="ballot">{rows.clone()}</div>
-                <button on:click=submit>"Cast encrypted vote"</button>
-            </div>
-        </Show>
+        <PickedSoFar />
+        {body}
         <div class="card stack">
             {move || {
                 let (k, n) = progress();
                 view! {
                     <div class="meter-row">
-                        <span>"Votes"</span>
+                        <span>"Ready"</span>
                         <progress max=n value=k></progress>
                         <span class="muted">{format!("{k}/{n}")}</span>
                     </div>
                 }
             }}
-            <p class="muted">"Voting closes by itself once everyone has voted."</p>
+            <p class="muted">
+                {if round > 1 {
+                    "Voting closes by itself once everyone has kept or updated their vote."
+                } else {
+                    "Voting closes by itself once everyone has voted."
+                }}
+            </p>
             <Show when=is_creator>
                 <button class="secondary" on:click=move |_| net::send(&ClientMsg::CloseVoting)>
                     "Close voting now"
@@ -613,21 +739,33 @@ fn Voting() -> impl IntoView {
 fn Tallying() -> impl IntoView {
     let conn = session().conn;
     let progress = move || {
-        read(conn, (0, 0), |v| {
+        read(conn, (0, 0, 0, 0), |v| {
             (
-                v.partials.len(),
-                v.ceremony.as_ref().map(|c| c.threshold).unwrap_or(0),
+                v.rounds.last().map_or(0, |r| r.partials.len()),
+                v.ceremony.as_ref().map_or(0, |c| c.threshold),
+                v.rounds.len(),
+                v.days,
             )
         })
     };
     view! {
+        <PickedSoFar />
         <div class="card stack">
-            <h2>"Revealing the result"</h2>
+            <h2>
+                {move || {
+                    let (_, _, round, days) = progress();
+                    if days > 1 {
+                        format!("Revealing day {round} of {days}")
+                    } else {
+                        "Revealing the result".to_string()
+                    }
+                }}
+            </h2>
             <p>
                 "Trustees' browsers each decrypt a share of the total — never an individual ballot — and prove they did it honestly."
             </p>
             {move || {
-                let (k, t) = progress();
+                let (k, t, _, _) = progress();
                 view! {
                     <div class="meter-row">
                         <span>"Trustees"</span>
@@ -640,73 +778,94 @@ fn Tallying() -> impl IntoView {
     }
 }
 
+/// One finished round, as re-derived and checked in this browser.
 #[derive(Clone, PartialEq)]
 struct Outcome {
-    rows: Vec<(String, Vec<u64>, u64, u64)>,
+    /// (date, per-tier counts, can come, score, picked in an earlier round), best first.
+    rows: Vec<(String, Vec<u64>, u64, u64, bool)>,
     ballots: u64,
+    winner: Option<(String, u64)>,
     verified: Result<(), String>,
+    winner_checks_out: bool,
     decrypted_by: Vec<String>,
     mine: Option<bool>,
 }
 
-#[component]
-fn Results() -> impl IntoView {
+fn outcome(v: &PollView, id: &str, token: &str, round: usize) -> Option<Outcome> {
+    let r = v.rounds.get(round.checked_sub(1)?)?;
+    let tally = r.tally.as_ref()?;
+    let board = v.board_for(round)?;
+    let verified = verify_tally(&board, tally).map_err(|e| e.to_string());
+    let result = TieredResult::from_tally(&board.poll, tally).ok()?;
+    let before = v.picked_before(round);
+    let cv = v.ceremony.as_ref()?;
+    Some(Outcome {
+        rows: result
+            .order()
+            .into_iter()
+            .map(|o| {
+                (
+                    v.options[o].clone(),
+                    result.counts[o].clone(),
+                    result.available[o],
+                    result.score[o],
+                    before.contains(&o),
+                )
+            })
+            .collect(),
+        ballots: tally.ballots,
+        winner: r
+            .winner
+            .map(|o| (v.options[o].clone(), result.available[o])),
+        verified,
+        winner_checks_out: round_winner(&result, &before) == r.winner,
+        decrypted_by: tally
+            .partials
+            .iter()
+            .map(|p| {
+                v.participants[cv.trustees[p.trustee as usize - 1]]
+                    .name
+                    .clone()
+            })
+            .collect(),
+        mine: store::receipt_for(id, token, round).map(|rc| board.contains(&rc)),
+    })
+}
+
+/// Outcomes of every finished round, recomputed when the state changes.
+fn finished_rounds() -> Memo<Vec<Outcome>> {
     let s = session();
     let conn = s.conn;
-    let (id, token) = (s.id.clone(), s.token.clone());
-    let outcome = Memo::new(move |_| {
-        conn.state.with(|st| {
-            let v = st.as_ref()?;
-            let board = v.board()?;
-            let tally = v.tally.as_ref()?;
-            let verified = verify_tally(&board, tally).map_err(|e| e.to_string());
-            let result = TieredResult::from_tally(&board.poll, tally).ok()?;
-            let cv = v.ceremony.as_ref()?;
-            Some(Outcome {
-                rows: result
-                    .order()
-                    .into_iter()
-                    .map(|o| {
-                        (
-                            v.options[o].clone(),
-                            result.counts[o].clone(),
-                            result.available[o],
-                            result.score[o],
-                        )
-                    })
-                    .collect(),
-                ballots: tally.ballots,
-                verified,
-                decrypted_by: tally
-                    .partials
-                    .iter()
-                    .map(|p| {
-                        v.participants[cv.trustees[p.trustee as usize - 1]]
-                            .name
-                            .clone()
-                    })
-                    .collect(),
-                mine: store::receipt(&id, &token).map(|r| board.contains(&r)),
+    let ids = StoredValue::new((s.id, s.token));
+    Memo::new(move |_| {
+        read(conn, Vec::new(), |v| {
+            ids.with_value(|(id, token)| {
+                (1..=v.rounds.len())
+                    .map_while(|r| outcome(v, id, token, r))
+                    .collect()
             })
         })
-    });
+    })
+}
 
-    move || {
-        let Some(o) = outcome.get() else {
-            return view! { <div class="card error">"Couldn't rebuild the result from the board."</div> }
-                .into_any();
-        };
-        let winner = o.rows.first().cloned();
-        view! {
-            {winner.map(|(date, _, available, _)| view! {
-                <div class="card winner">
-                    <span class="muted">"Best day"</span>
-                    <h2>{util::pretty_date(&date)}</h2>
-                    <p>{format!("{available} of {} can make it", o.ballots)}</p>
-                </div>
-            })}
-            <div class="card stack">
-                <h2>"Results"</h2>
+#[component]
+fn RoundDetails(outcome: Outcome, round: usize, days: usize, open: bool) -> impl IntoView {
+    let o = outcome;
+    let title = match (&o.winner, days) {
+        (Some((date, _)), 1) => format!("Result: {}", util::pretty_date(date)),
+        (Some((date, _)), _) => format!("Day {round}: {}", util::pretty_date(date)),
+        (None, _) => format!("Day {round}: no date found"),
+    };
+    let checks_out = o.verified.is_ok() && o.winner_checks_out;
+    view! {
+        <details class="card round" open=open>
+            <summary>
+                <span>{title}</span>
+                <span class=if checks_out { "ok" } else { "error" }>
+                    {if checks_out { "✓ verified" } else { "✗ check failed" }}
+                </span>
+            </summary>
+            <div class="stack">
                 <table class="results">
                     <thead>
                         <tr>
@@ -717,9 +876,12 @@ fn Results() -> impl IntoView {
                         </tr>
                     </thead>
                     <tbody>
-                        {o.rows.iter().map(|(date, counts, available, score)| view! {
-                            <tr>
-                                <th>{util::pretty_date(date)}</th>
+                        {o.rows.iter().map(|(date, counts, available, score, earlier)| view! {
+                            <tr class:earlier=*earlier>
+                                <th>
+                                    {util::pretty_date(date)}
+                                    {earlier.then_some(view! { <span class="tag">"picked"</span> })}
+                                </th>
                                 {counts.iter().map(|c| view! { <td>{*c}</td> }).collect_view()}
                                 <td>{*available}</td>
                                 <td>{*score}</td>
@@ -727,10 +889,10 @@ fn Results() -> impl IntoView {
                         }).collect_view()}
                     </tbody>
                 </table>
-                <p class="muted">"Days are ranked by how many can come, then by preference (3 / 2 / 1 points)."</p>
-            </div>
-            <div class="card stack">
-                <h2>"Verification"</h2>
+                <p class="muted">
+                    "Days are ranked by how many can come, then by preference (3 / 2 / 1 points)."
+                    {(round > 1).then_some(" Days picked in earlier rounds can't win again.")}
+                </p>
                 {match &o.verified {
                     Ok(()) => view! {
                         <p class="ok">{format!(
@@ -741,12 +903,103 @@ fn Results() -> impl IntoView {
                     }.into_any(),
                     Err(e) => view! { <p class="error">{format!("✗ Verification failed: {e}")}</p> }.into_any(),
                 }}
+                {(!o.winner_checks_out).then(|| view! {
+                    <p class="error">"✗ The server's pick for this round doesn't match these totals!"</p>
+                })}
                 {match o.mine {
                     Some(true) => view! { <p class="ok">"✓ Your ballot is on the board and was counted."</p> }.into_any(),
                     Some(false) => view! { <p class="error">"✗ Your ballot is missing from the board!"</p> }.into_any(),
                     None => view! { <p class="muted">"You didn't vote from this browser."</p> }.into_any(),
                 }}
             </div>
+        </details>
+    }
+}
+
+/// While a later round is running: the days picked so far, with their proofs.
+#[component]
+fn PickedSoFar() -> impl IntoView {
+    let conn = session().conn;
+    let outcomes = finished_rounds();
+    let days = move || read(conn, 1, |v| v.days);
+    move || {
+        let days = days();
+        outcomes
+            .get()
+            .into_iter()
+            .enumerate()
+            .map(|(i, o)| view! { <RoundDetails outcome=o round=i + 1 days=days open=false /> })
+            .collect_view()
+    }
+}
+
+#[component]
+fn Results() -> impl IntoView {
+    let conn = session().conn;
+    let outcomes = finished_rounds();
+    let days = move || read(conn, 1, |v| v.days);
+
+    move || {
+        let (outcomes, days) = (outcomes.get(), days());
+        if outcomes.is_empty() {
+            return view! { <div class="card error">"Couldn't rebuild the result from the board."</div> }
+                .into_any();
+        }
+        let summary = if days == 1 {
+            match &outcomes[0].winner {
+                Some((date, available)) => view! {
+                    <div class="card winner">
+                        <span class="muted">"Best day"</span>
+                        <h2>{util::pretty_date(date)}</h2>
+                        <p>{format!("{available} of {} can make it", outcomes[0].ballots)}</p>
+                    </div>
+                }
+                .into_any(),
+                None => view! {
+                    <div class="card winner">
+                        <h2>"No date works"</h2>
+                        <p>"Nobody can make any of the suggested days."</p>
+                    </div>
+                }
+                .into_any(),
+            }
+        } else {
+            let found = outcomes.iter().filter(|o| o.winner.is_some()).count();
+            view! {
+                <div class="card winner">
+                    <span class="muted">
+                        {format!("Found {found} of {days} day{}", if days == 1 { "" } else { "s" })}
+                    </span>
+                    <ol class="picked">
+                        {outcomes
+                            .iter()
+                            .map(|o| match &o.winner {
+                                Some((date, available)) => view! {
+                                    <li>
+                                        <strong>{util::pretty_date(date)}</strong>
+                                        <span class="muted">{format!(" — {available} of {} can make it", o.ballots)}</span>
+                                    </li>
+                                }
+                                .into_any(),
+                                None => view! {
+                                    <li class="muted">"No remaining day works for anyone, so the search stopped here."</li>
+                                }
+                                .into_any(),
+                            })
+                            .collect_view()}
+                    </ol>
+                </div>
+            }
+            .into_any()
+        };
+        let single = outcomes.len() == 1;
+        view! {
+            {summary}
+            {outcomes
+                .into_iter()
+                .enumerate()
+                .map(|(i, o)| view! { <RoundDetails outcome=o round=i + 1 days=days open=single /> })
+                .collect_view()}
         }
         .into_any()
     }

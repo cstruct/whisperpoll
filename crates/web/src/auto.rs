@@ -14,11 +14,11 @@ use crate::{net, store};
 thread_local! {
     /// Steps already sent on this connection, so a burst of state updates
     /// doesn't send the same step twice before the server has acknowledged it.
-    static SENT: RefCell<HashSet<&'static str>> = RefCell::new(HashSet::new());
+    static SENT: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
-fn once(step: &'static str) -> bool {
-    SENT.with(|s| s.borrow_mut().insert(step))
+fn once(step: &str) -> bool {
+    SENT.with(|s| s.borrow_mut().insert(step.to_string()))
 }
 
 /// Forget what was sent: after a reconnect, the next state decides afresh.
@@ -63,7 +63,12 @@ pub fn run(view: &PollView, token: &str) {
             let Some(j) = ceremony.index_of(&me) else {
                 return;
             };
-            if view.partials.iter().any(|p| p.trustee == j) || !once("partial") {
+            let round = view.rounds.len();
+            let done = view
+                .rounds
+                .last()
+                .is_some_and(|r| r.partials.iter().any(|p| p.trustee == j));
+            if done || !once(&format!("partial:{round}")) {
                 return;
             }
             let share = ceremony.key_share(&me, &cv.dealings, &cv.complaints);

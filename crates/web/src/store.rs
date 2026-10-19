@@ -39,12 +39,31 @@ pub fn identity(poll: &str, token: &str) -> TrusteeIdentity {
     id
 }
 
-pub fn save_receipt(poll: &str, token: &str, receipt: &Receipt) {
-    set(&key(poll, token, "receipt"), &to_hex(&receipt.0));
+pub fn save_receipt(poll: &str, token: &str, round: usize, receipt: &Receipt) {
+    set(
+        &key(poll, token, &format!("receipt:{round}")),
+        &to_hex(&receipt.0),
+    );
 }
 
-pub fn receipt(poll: &str, token: &str) -> Option<Receipt> {
-    get(&key(poll, token, "receipt"))
-        .and_then(|hex| from_hex::<32>(&hex))
-        .map(Receipt)
+/// The receipt of this participant's ballot in `round`: the one cast that
+/// round, or else the latest earlier one, which was carried over.
+pub fn receipt_for(poll: &str, token: &str, round: usize) -> Option<Receipt> {
+    (1..=round).rev().find_map(|r| {
+        get(&key(poll, token, &format!("receipt:{r}")))
+            .and_then(|hex| from_hex::<32>(&hex))
+            .map(Receipt)
+    })
+}
+
+/// The tiers last voted, to prefill the next round's ballot.
+pub fn save_choices(poll: &str, token: &str, choices: &[Option<usize>]) {
+    set(
+        &key(poll, token, "choices"),
+        &serde_json::to_string(choices).unwrap(),
+    );
+}
+
+pub fn choices(poll: &str, token: &str) -> Option<Vec<Option<usize>>> {
+    serde_json::from_str(&get(&key(poll, token, "choices"))?).ok()
 }

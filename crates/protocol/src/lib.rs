@@ -16,11 +16,17 @@
 //! 4. [`Phase::Tallying`] — trustee browsers publish partial decryptions of
 //!    the aggregate until the threshold is met.
 //! 5. [`Phase::Done`] — the result is public and anyone can verify it.
+//!
+//! A poll can look for several days. Each day is a round of steps 3–4:
+//! when a round picks a day and more are wanted, the next round opens with
+//! everyone's ballot carried over, so voters may update their choices or keep
+//! them. Days already picked can't win again; a round where no remaining day
+//! works for anyone picks nothing and ends the poll.
 
 use serde::{Deserialize, Serialize};
 use whisperpoll_core::{
     Ballot, BallotKind, BulletinBoard, Ceremony, Complaint, Dealing, PartialDecryption, Poll,
-    Registration, TallyKey, TallyResult,
+    Registration, TallyKey, TallyResult, TieredResult,
 };
 
 /// Tier names for the ballot, most preferred first. Leaving a day out of
@@ -59,6 +65,9 @@ pub struct ParticipantView {
     pub creator: bool,
     pub online: bool,
     pub registration: Option<Registration>,
+    /// Has a ballot in the current round (cast now or carried over).
+    pub has_ballot: bool,
+    /// Has voted or confirmed their carried-over ballot this round.
     pub voted: bool,
 }
 
@@ -102,20 +111,42 @@ pub struct PollView {
     pub ceremony: Option<CeremonyView>,
     /// The locked candidate dates, once the ceremony has started.
     pub options: Vec<String>,
+    /// How many days the poll is looking for.
+    pub days: usize,
+    /// One round per day looked for so far; the last is the current one.
+    pub rounds: Vec<RoundView>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RoundView {
+    /// Ballots on this round's board, in board order (sorted by receipt, so
+    /// the order says nothing about who cast what).
     pub ballots: Vec<Ballot>,
     pub partials: Vec<PartialDecryption>,
     pub tally: Option<TallyResult>,
+    /// The option this round picked, per [`round_winner`]; `None` while
+    /// undecided or if no remaining day works for anyone.
+    pub winner: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ClientMsg {
     Register(Registration),
-    Invite { name: String },
-    SuggestDate { date: String },
-    StartCeremony { threshold: usize },
+    Invite {
+        name: String,
+    },
+    SuggestDate {
+        date: String,
+    },
+    StartCeremony {
+        threshold: usize,
+        days: usize,
+    },
     Deal(Dealing),
     Checked(Vec<Complaint>),
     Vote(Ballot),
+    /// Keep the ballot carried over from the previous round as is.
+    KeepVote,
     CloseVoting,
     Partial(PartialDecryption),
 }
@@ -155,14 +186,43 @@ impl PollView {
         ))
     }
 
-    /// The bulletin board, with every ballot re-verified locally.
-    pub fn board(&self) -> Option<BulletinBoard> {
+    /// Round `round` (1-based)'s bulletin board, every ballot re-verified locally.
+    pub fn board_for(&self, round: usize) -> Option<BulletinBoard> {
+        let r = self.rounds.get(round.checked_sub(1)?)?;
         let mut board = BulletinBoard::new(self.poll()?);
-        for ballot in &self.ballots {
+        for ballot in &r.ballots {
             board.submit(ballot.clone()).ok()?;
         }
         Some(board)
     }
+
+    /// The current round's bulletin board.
+    pub fn board(&self) -> Option<BulletinBoard> {
+        self.board_for(self.rounds.len())
+    }
+
+    /// Options picked by the rounds before `round` (1-based).
+    pub fn picked_before(&self, round: usize) -> Vec<usize> {
+        self.rounds
+            .iter()
+            .take(round.saturating_sub(1))
+            .filter_map(|r| r.winner)
+            .collect()
+    }
+
+    /// Every option picked so far, in round order.
+    pub fn picked(&self) -> Vec<usize> {
+        self.picked_before(self.rounds.len() + 1)
+    }
+}
+
+/// A round's pick: the best day not already picked that at least one person
+/// can make, in [`TieredResult::order`] (most available, then preference).
+pub fn round_winner(result: &TieredResult, already_picked: &[usize]) -> Option<usize> {
+    result
+        .order()
+        .into_iter()
+        .find(|o| !already_picked.contains(o) && result.available[*o] > 0)
 }
 
 /// `YYYY-MM-DD` with plausible month and day.

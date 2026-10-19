@@ -1,14 +1,16 @@
 //! One poll's server-side state machine. Pure logic, no I/O, so it can be
 //! tested end to end with real cryptography and no sockets.
 
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
 use rand_core::{OsRng, RngCore};
 use whisperpoll_core::{
-    combine_tally, BulletinBoard, Ceremony, Complaint, Dealing, PartialDecryption, Poll,
-    Registration, TallyResult,
+    combine_tally, Ballot, BulletinBoard, Ceremony, Complaint, Dealing, PartialDecryption, Poll,
+    Receipt, Registration, TallyResult, TieredResult,
 };
 use whisperpoll_protocol::{
-    is_iso_date, CeremonyView, ClientMsg, DateSuggestion, InviteLink, ParticipantView, Phase,
-    PollView, BALLOT_KIND,
+    is_iso_date, round_winner, CeremonyView, ClientMsg, DateSuggestion, InviteLink,
+    ParticipantView, Phase, PollView, RoundView, BALLOT_KIND,
 };
 
 const MAX_NAME: usize = 40;
@@ -21,8 +23,31 @@ struct Member {
     token: String,
     creator: bool,
     registration: Option<Registration>,
-    voted: bool,
     online: usize,
+}
+
+/// One round of voting and tallying, looking for one day.
+#[derive(Default)]
+struct Round {
+    /// Each member's current ballot, carried over from the previous round
+    /// until they replace it.
+    ballots: BTreeMap<usize, Ballot>,
+    /// Members who voted or kept their ballot this round.
+    confirmed: BTreeSet<usize>,
+    /// Fixed when voting closes.
+    board: Option<BulletinBoard>,
+    partials: Vec<PartialDecryption>,
+    tally: Option<TallyResult>,
+    winner: Option<usize>,
+}
+
+impl Round {
+    /// Ballots in board order: by receipt, so position doesn't reveal the voter.
+    fn sorted_ballots(&self) -> Vec<Ballot> {
+        let mut ballots: Vec<Ballot> = self.ballots.values().cloned().collect();
+        ballots.sort_by_key(|b| b.receipt().0);
+        ballots
+    }
 }
 
 struct KeyCeremony {
@@ -42,9 +67,11 @@ pub struct Room {
     dates: Vec<DateSuggestion>,
     key: Option<KeyCeremony>,
     options: Vec<String>,
-    board: Option<BulletinBoard>,
-    partials: Vec<PartialDecryption>,
-    tally: Option<TallyResult>,
+    days: usize,
+    poll: Option<Poll>,
+    rounds: Vec<Round>,
+    /// Every ballot ever accepted, so none can be replayed in a later round.
+    used: HashSet<Receipt>,
 }
 
 pub fn random_token() -> String {
@@ -77,15 +104,15 @@ impl Room {
                 token: token.clone(),
                 creator: true,
                 registration: None,
-                voted: false,
                 online: 0,
             }],
             dates: Vec::new(),
             key: None,
             options: Vec::new(),
-            board: None,
-            partials: Vec::new(),
-            tally: None,
+            days: 1,
+            poll: None,
+            rounds: Vec::new(),
+            used: HashSet::new(),
         };
         Ok((room, token))
     }
@@ -133,14 +160,17 @@ impl Room {
             ClientMsg::Register(reg) => self.register(who, reg),
             ClientMsg::Invite { name } => self.invite(who, &name),
             ClientMsg::SuggestDate { date } => self.suggest_date(who, date),
-            ClientMsg::StartCeremony { threshold } => self.start_ceremony(who, threshold),
+            ClientMsg::StartCeremony { threshold, days } => {
+                self.start_ceremony(who, threshold, days)
+            }
             ClientMsg::Deal(d) => self.deal(who, d),
             ClientMsg::Checked(cs) => self.checked(who, cs),
             ClientMsg::Vote(ballot) => self.vote(who, ballot),
+            ClientMsg::KeepVote => self.keep_vote(who),
             ClientMsg::CloseVoting => {
                 self.require_creator(who)?;
                 self.require_phase(Phase::Voting)?;
-                self.phase = Phase::Tallying;
+                self.close_voting();
                 Ok(())
             }
             ClientMsg::Partial(p) => self.partial(who, p),
@@ -186,7 +216,6 @@ impl Room {
             token: random_token(),
             creator: false,
             registration: None,
-            voted: false,
             online: 0,
         });
         Ok(())
@@ -211,11 +240,14 @@ impl Room {
         Ok(())
     }
 
-    fn start_ceremony(&mut self, who: usize, threshold: usize) -> Result<(), String> {
+    fn start_ceremony(&mut self, who: usize, threshold: usize, days: usize) -> Result<(), String> {
         self.require_creator(who)?;
         self.require_phase(Phase::Gathering)?;
         if self.dates.is_empty() {
             return Err("suggest at least one date first".into());
+        }
+        if !(1..=self.dates.len()).contains(&days) {
+            return Err(format!("you can look for 1 to {} days", self.dates.len()));
         }
         let (trustees, regs): (Vec<usize>, Vec<Registration>) = self
             .members
@@ -233,6 +265,7 @@ impl Room {
             complaints: vec![None; n],
         });
         self.options = self.dates.iter().map(|d| d.date.clone()).collect();
+        self.days = days;
         self.phase = Phase::KeyCeremony;
         Ok(())
     }
@@ -280,14 +313,13 @@ impl Room {
             key.complaints.iter().flatten().flatten().cloned().collect();
         match key.ceremony.finalize(&dealings, &complaints) {
             Ok(tally_key) => {
-                let poll = Poll::new(
+                self.poll = Some(Poll::new(
                     self.id.clone(),
                     self.options.clone(),
                     BALLOT_KIND,
                     tally_key,
-                );
-                self.board = Some(BulletinBoard::new(poll));
-                self.phase = Phase::Voting;
+                ));
+                self.start_round();
             }
             Err(e) => {
                 self.phase = Phase::Failed {
@@ -297,43 +329,100 @@ impl Room {
         }
     }
 
-    fn vote(&mut self, who: usize, ballot: whisperpoll_core::Ballot) -> Result<(), String> {
+    fn round(&mut self) -> &mut Round {
+        self.rounds.last_mut().expect("voting has started")
+    }
+
+    /// Opens the next round with everyone's ballots carried over.
+    fn start_round(&mut self) {
+        let ballots = self
+            .rounds
+            .last()
+            .map(|r| r.ballots.clone())
+            .unwrap_or_default();
+        self.rounds.push(Round {
+            ballots,
+            ..Round::default()
+        });
+        self.phase = Phase::Voting;
+    }
+
+    fn vote(&mut self, who: usize, ballot: Ballot) -> Result<(), String> {
         self.require_phase(Phase::Voting)?;
-        if self.members[who].voted {
-            return Err("you've already voted".into());
-        }
-        let board = self.board.as_mut().unwrap();
-        board
-            .submit(ballot)
+        let poll = self.poll.as_ref().unwrap();
+        poll.verify_ballot(&ballot)
             .map_err(|e| format!("ballot rejected: {e}"))?;
-        self.members[who].voted = true;
-        if self.members.iter().all(|m| m.voted) {
-            self.phase = Phase::Tallying;
+        if !self.used.insert(ballot.receipt()) {
+            return Err("that exact ballot has been used before".into());
         }
+        let round = self.round();
+        round.ballots.insert(who, ballot);
+        round.confirmed.insert(who);
+        self.close_if_everyone_voted();
         Ok(())
     }
 
+    fn keep_vote(&mut self, who: usize) -> Result<(), String> {
+        self.require_phase(Phase::Voting)?;
+        let round = self.round();
+        if !round.ballots.contains_key(&who) {
+            return Err("you have no earlier vote to keep".into());
+        }
+        round.confirmed.insert(who);
+        self.close_if_everyone_voted();
+        Ok(())
+    }
+
+    fn close_if_everyone_voted(&mut self) {
+        let n = self.members.len();
+        if (0..n).all(|m| self.round().confirmed.contains(&m)) {
+            self.close_voting();
+        }
+    }
+
+    fn close_voting(&mut self) {
+        let mut board = BulletinBoard::new(self.poll.clone().unwrap());
+        let round = self.round();
+        for ballot in round.sorted_ballots() {
+            board
+                .submit(ballot)
+                .expect("ballots were verified on entry");
+        }
+        round.board = Some(board);
+        self.phase = Phase::Tallying;
+    }
+
     fn partial(&mut self, who: usize, p: PartialDecryption) -> Result<(), String> {
-        if self.phase == Phase::Done {
+        if self.phase != Phase::Tallying {
             // Trustees decrypt in parallel; ones arriving after the threshold
             // was met are simply not needed.
             return Ok(());
         }
-        self.require_phase(Phase::Tallying)?;
         let j = self.trustee_index(who).ok_or("you're not a trustee")?;
         if p.trustee != j {
             return Err("partial decryption is for another trustee".into());
         }
-        if self.partials.iter().any(|q| q.trustee == j) {
+        let round = self.round();
+        if round.partials.iter().any(|q| q.trustee == j) {
             return Err("you've already decrypted".into());
         }
-        let board = self.board.as_ref().unwrap();
+        let board = round.board.as_ref().unwrap();
         if !board.verify_partial(&p) {
             return Err("partial decryption doesn't verify".into());
         }
-        self.partials.push(p);
-        if let Ok(tally) = combine_tally(board, &self.partials) {
-            self.tally = Some(tally);
+        round.partials.push(p);
+        let Ok(tally) = combine_tally(board, &round.partials) else {
+            return Ok(());
+        };
+        let result = TieredResult::from_tally(&board.poll, &tally).expect("tiered poll");
+        let picked: Vec<usize> = self.rounds.iter().filter_map(|r| r.winner).collect();
+        let winner = round_winner(&result, &picked);
+        let round = self.round();
+        round.tally = Some(tally);
+        round.winner = winner;
+        if winner.is_some() && self.rounds.len() < self.days {
+            self.start_round();
+        } else {
             self.phase = Phase::Done;
         }
         Ok(())
@@ -349,12 +438,17 @@ impl Room {
             participants: self
                 .members
                 .iter()
-                .map(|m| ParticipantView {
+                .enumerate()
+                .map(|(i, m)| ParticipantView {
                     name: m.name.clone(),
                     creator: m.creator,
                     online: m.online > 0,
                     registration: m.registration.clone(),
-                    voted: m.voted,
+                    has_ballot: self
+                        .rounds
+                        .last()
+                        .is_some_and(|r| r.ballots.contains_key(&i)),
+                    voted: self.rounds.last().is_some_and(|r| r.confirmed.contains(&i)),
                 })
                 .collect(),
             invites: if creator {
@@ -383,13 +477,20 @@ impl Room {
                 complaints: k.complaints.iter().flatten().flatten().cloned().collect(),
             }),
             options: self.options.clone(),
-            ballots: self
-                .board
-                .as_ref()
-                .map(|b| b.ballots().to_vec())
-                .unwrap_or_default(),
-            partials: self.partials.clone(),
-            tally: self.tally.clone(),
+            days: self.days,
+            rounds: self
+                .rounds
+                .iter()
+                .map(|r| RoundView {
+                    ballots: match &r.board {
+                        Some(board) => board.ballots().to_vec(),
+                        None => r.sorted_ballots(),
+                    },
+                    partials: r.partials.clone(),
+                    tally: r.tally.clone(),
+                    winner: r.winner,
+                })
+                .collect(),
         }
     }
 }
@@ -397,24 +498,21 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use whisperpoll_core::{
-        cast_tiered_ballot, partial_decrypt, verify_tally, TieredResult, TrusteeIdentity,
-    };
+    use whisperpoll_core::{cast_tiered_ballot, partial_decrypt, verify_tally, TrusteeIdentity};
 
-    /// Drives a full poll through `Room`, doing in-process exactly what the
-    /// browsers do: everything they compute comes from their `PollView`.
-    #[test]
-    fn full_poll_lifecycle() {
+    const P: Option<usize> = Some(0);
+    const OK: Option<usize> = Some(1);
+    const IN: Option<usize> = Some(2);
+    const X: Option<usize> = None;
+
+    /// Three people, three dates, key ceremony done: voting is open. Every
+    /// step does in-process exactly what the browsers do from their `PollView`.
+    fn setup(days: usize) -> (Room, Vec<TrusteeIdentity>) {
         let (mut room, _) = Room::new("p1".into(), "Team dinner", "alice").unwrap();
-        room.apply(0, ClientMsg::Invite { name: "bob".into() })
-            .unwrap();
-        room.apply(
-            0,
-            ClientMsg::Invite {
-                name: "carol".into(),
-            },
-        )
-        .unwrap();
+        for name in ["bob", "carol"] {
+            let name = name.into();
+            room.apply(0, ClientMsg::Invite { name }).unwrap();
+        }
         assert_eq!(room.view(0).invites.len(), 2);
         assert!(room.view(1).invites.is_empty());
 
@@ -422,18 +520,16 @@ mod tests {
             .map(|_| TrusteeIdentity::generate(&mut OsRng))
             .collect();
         for (who, id) in ids.iter().enumerate() {
-            room.apply(who, ClientMsg::Register(id.register("p1", &mut OsRng)))
-                .unwrap();
+            let reg = id.register("p1", &mut OsRng);
+            room.apply(who, ClientMsg::Register(reg)).unwrap();
         }
         for date in ["2026-10-25", "2026-10-24", "2026-10-26"] {
-            room.apply(1, ClientMsg::SuggestDate { date: date.into() })
-                .unwrap();
+            let date = date.into();
+            room.apply(1, ClientMsg::SuggestDate { date }).unwrap();
         }
-        assert!(room
-            .apply(1, ClientMsg::StartCeremony { threshold: 2 })
-            .is_err());
-        room.apply(0, ClientMsg::StartCeremony { threshold: 2 })
-            .unwrap();
+        let start = ClientMsg::StartCeremony { threshold: 2, days };
+        assert!(room.apply(1, start.clone()).is_err());
+        room.apply(0, start).unwrap();
         assert_eq!(
             room.view(0).options,
             ["2026-10-24", "2026-10-25", "2026-10-26"]
@@ -441,81 +537,151 @@ mod tests {
 
         for (who, id) in ids.iter().enumerate() {
             let c = room.view(who).ceremony().unwrap();
-            room.apply(who, ClientMsg::Deal(c.deal(id, &mut OsRng).unwrap()))
-                .unwrap();
+            let dealing = c.deal(id, &mut OsRng).unwrap();
+            room.apply(who, ClientMsg::Deal(dealing)).unwrap();
         }
         for (who, id) in ids.iter().enumerate() {
             let v = room.view(who);
             let dealings = &v.ceremony.as_ref().unwrap().dealings;
-            let cs = v
-                .ceremony()
-                .unwrap()
-                .check_dealings(id, dealings, &mut OsRng)
-                .unwrap();
-            room.apply(who, ClientMsg::Checked(cs)).unwrap();
+            let c = v.ceremony().unwrap();
+            let complaints = c.check_dealings(id, dealings, &mut OsRng).unwrap();
+            room.apply(who, ClientMsg::Checked(complaints)).unwrap();
         }
         assert_eq!(room.view(0).phase, Phase::Voting);
+        (room, ids)
+    }
 
-        let votes = [
-            [Some(0), Some(1), None],
-            [None, Some(0), Some(0)],
-            [Some(2), Some(0), Some(1)],
-        ];
-        for (who, choices) in votes.iter().enumerate() {
-            let poll = room.view(who).poll().unwrap();
-            let ballot = cast_tiered_ballot(&poll, choices, &mut OsRng).unwrap();
-            room.apply(who, ClientMsg::Vote(ballot.clone())).unwrap();
-            assert!(room.apply(who, ClientMsg::Vote(ballot)).is_err());
-        }
-        // Everyone voted, so voting closed by itself.
-        assert_eq!(room.view(0).phase, Phase::Tallying);
+    fn ballot(room: &Room, choices: &[Option<usize>]) -> Ballot {
+        let poll = room.view(0).poll().unwrap();
+        cast_tiered_ballot(&poll, choices, &mut OsRng).unwrap()
+    }
 
-        // Trustees 1 and 3 decrypt; 2 never shows up.
-        for who in [0, 2] {
-            let v = room.view(who);
-            let c = v.ceremony.as_ref().unwrap();
-            let share = v
-                .ceremony()
-                .unwrap()
-                .key_share(&ids[who], &c.dealings, &c.complaints)
-                .unwrap();
-            let p = partial_decrypt(&share, &v.board().unwrap(), &mut OsRng);
-            room.apply(who, ClientMsg::Partial(p)).unwrap();
-        }
+    fn vote(room: &mut Room, who: usize, choices: &[Option<usize>]) {
+        let b = ballot(room, choices);
+        room.apply(who, ClientMsg::Vote(b)).unwrap();
+    }
 
-        // Trustee 2 turns up late: not needed, not an error.
-        let v = room.view(1);
+    fn decrypt(room: &mut Room, ids: &[TrusteeIdentity], who: usize) {
+        let v = room.view(who);
         let c = v.ceremony.as_ref().unwrap();
         let share = v
             .ceremony()
             .unwrap()
-            .key_share(&ids[1], &c.dealings, &c.complaints)
+            .key_share(&ids[who], &c.dealings, &c.complaints)
             .unwrap();
-        let late = partial_decrypt(&share, &v.board().unwrap(), &mut OsRng);
-        room.apply(1, ClientMsg::Partial(late)).unwrap();
+        let p = partial_decrypt(&share, &v.board().unwrap(), &mut OsRng);
+        room.apply(who, ClientMsg::Partial(p)).unwrap();
+    }
+
+    /// What a browser does to check a finished round on its own.
+    fn verified_result(room: &Room, round: usize) -> (TieredResult, Option<usize>) {
+        let v = room.view(0);
+        let board = v.board_for(round).unwrap();
+        let r = &v.rounds[round - 1];
+        let tally = r.tally.as_ref().unwrap();
+        verify_tally(&board, tally).unwrap();
+        let result = TieredResult::from_tally(&board.poll, tally).unwrap();
+        assert_eq!(round_winner(&result, &v.picked_before(round)), r.winner);
+        (result, r.winner)
+    }
+
+    #[test]
+    fn single_day_poll() {
+        let (mut room, ids) = setup(1);
+        // A second ballot from the same person replaces their first.
+        vote(&mut room, 0, &[X, X, X]);
+        vote(&mut room, 0, &[P, OK, X]);
+        vote(&mut room, 1, &[X, P, P]);
+        vote(&mut room, 2, &[IN, P, OK]);
+        // Everyone voted, so voting closed by itself.
+        assert_eq!(room.view(0).phase, Phase::Tallying);
+        assert_eq!(room.view(0).rounds[0].ballots.len(), 3);
+
+        // Trustees 1 and 3 decrypt; 2 turns up late, which is harmless.
+        decrypt(&mut room, &ids, 0);
+        decrypt(&mut room, &ids, 2);
+        decrypt(&mut room, &ids, 1);
 
         let v = room.view(1);
         assert_eq!(v.phase, Phase::Done);
-        assert_eq!(v.partials.len(), 2);
-        let board = v.board().unwrap();
-        let tally = v.tally.as_ref().unwrap();
-        verify_tally(&board, tally).unwrap();
-        let result = TieredResult::from_tally(&board.poll, tally).unwrap();
+        assert_eq!(v.rounds[0].partials.len(), 2);
+        let (result, winner) = verified_result(&room, 1);
         assert_eq!(result.available, vec![2, 3, 2]);
-        assert_eq!(result.winner(), Some(1));
+        assert_eq!(winner, Some(1));
+        assert_eq!(room.view(0).picked(), [1]);
+    }
+
+    #[test]
+    fn two_days_with_carried_and_updated_votes() {
+        let (mut room, ids) = setup(2);
+        vote(&mut room, 0, &[P, OK, X]);
+        vote(&mut room, 1, &[X, P, P]);
+        vote(&mut room, 2, &[IN, P, OK]);
+        decrypt(&mut room, &ids, 0);
+        decrypt(&mut room, &ids, 1);
+        assert_eq!(verified_result(&room, 1).1, Some(1));
+
+        // Round 2 opens with everyone's ballot carried over, not yet confirmed.
+        let v = room.view(0);
+        assert_eq!((v.phase.clone(), v.rounds.len()), (Phase::Voting, 2));
+        assert!(v.participants.iter().all(|p| p.has_ballot && !p.voted));
+        assert_eq!(v.rounds[1].ballots, v.rounds[0].ballots);
+
+        // Nobody can replay a ballot from round 1 as their own.
+        let alices_old = v.rounds[0].ballots[0].clone();
+        assert!(room.apply(2, ClientMsg::Vote(alices_old)).is_err());
+
+        // bob now prefers Fri; alice and carol keep their votes.
+        vote(&mut room, 1, &[P, X, X]);
+        room.apply(0, ClientMsg::KeepVote).unwrap();
+        assert_eq!(room.view(0).phase, Phase::Voting);
+        room.apply(2, ClientMsg::KeepVote).unwrap();
+        assert_eq!(room.view(0).phase, Phase::Tallying);
+
+        decrypt(&mut room, &ids, 2);
+        decrypt(&mut room, &ids, 0);
+        let (result, winner) = verified_result(&room, 2);
+        // Everyone can make Fri now; Sat is already picked anyway.
+        assert_eq!(result.available, vec![3, 2, 1]);
+        assert_eq!(winner, Some(0));
+        let v = room.view(0);
+        assert_eq!(v.phase, Phase::Done);
+        assert_eq!(v.picked(), [1, 0]);
+    }
+
+    #[test]
+    fn a_later_round_can_find_no_date() {
+        let (mut room, ids) = setup(3);
+        for who in 0..3 {
+            vote(&mut room, who, &[X, P, X]);
+        }
+        decrypt(&mut room, &ids, 0);
+        decrypt(&mut room, &ids, 1);
+        assert_eq!(room.view(0).rounds[0].winner, Some(1));
+
+        // Round 2: only Sat works for anyone, and Sat is taken.
+        assert!(room.apply(0, ClientMsg::CloseVoting).is_ok());
+        decrypt(&mut room, &ids, 1);
+        decrypt(&mut room, &ids, 2);
+        let v = room.view(0);
+        assert_eq!(verified_result(&room, 2).1, None);
+        // No third round after a round that found nothing.
+        assert_eq!((v.phase.clone(), v.rounds.len()), (Phase::Done, 2));
+        assert_eq!(v.picked(), [1]);
+    }
+
+    #[test]
+    fn keeping_needs_an_earlier_vote() {
+        let (mut room, _) = setup(1);
+        assert!(room.apply(0, ClientMsg::KeepVote).is_err());
     }
 
     #[test]
     fn bad_inputs_are_rejected() {
         let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
-        assert!(room
-            .apply(
-                0,
-                ClientMsg::SuggestDate {
-                    date: "tomorrow".into()
-                }
-            )
-            .is_err());
+        let date = |d: &str| ClientMsg::SuggestDate { date: d.into() };
+        let start = |days| ClientMsg::StartCeremony { threshold: 1, days };
+        assert!(room.apply(0, date("tomorrow")).is_err());
         assert!(room
             .apply(0, ClientMsg::Invite { name: "  ".into() })
             .is_err());
@@ -526,26 +692,19 @@ mod tests {
             .is_err());
         // A registration for another poll.
         let id = TrusteeIdentity::generate(&mut OsRng);
-        assert!(room
-            .apply(1, ClientMsg::Register(id.register("other", &mut OsRng)))
-            .is_err());
+        let other = id.register("other", &mut OsRng);
+        assert!(room.apply(1, ClientMsg::Register(other)).is_err());
         // Can't start without dates or with no trustees.
-        assert!(room
-            .apply(0, ClientMsg::StartCeremony { threshold: 1 })
-            .is_err());
-        room.apply(
-            0,
-            ClientMsg::SuggestDate {
-                date: "2026-10-24".into(),
-            },
-        )
-        .unwrap();
-        assert!(room
-            .apply(0, ClientMsg::StartCeremony { threshold: 1 })
-            .is_err());
+        assert!(room.apply(0, start(1)).is_err());
+        room.apply(0, date("2026-10-24")).unwrap();
+        assert!(room.apply(0, start(1)).is_err());
         // Can't register someone else's key.
         let reg = id.register("p1", &mut OsRng);
         room.apply(0, ClientMsg::Register(reg.clone())).unwrap();
         assert!(room.apply(1, ClientMsg::Register(reg)).is_err());
+        // More days than dates, or none.
+        assert!(room.apply(0, start(2)).is_err());
+        assert!(room.apply(0, start(0)).is_err());
+        room.apply(0, start(1)).unwrap();
     }
 }
