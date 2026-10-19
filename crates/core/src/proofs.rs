@@ -22,7 +22,7 @@ use rand_core::CryptoRngCore;
 use crate::elgamal::{Ciphertext, PublicKey};
 use crate::transcript::Transcript;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BitProof {
     c: [Scalar; 2],
     z: [Scalar; 2],
@@ -31,21 +31,21 @@ pub struct BitProof {
 /// Proves a ciphertext encrypts a publicly known value, using the encryption
 /// randomness as witness (no secret key needed). Used to show that a sum of
 /// a voter's ciphertexts encrypts exactly 1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValueProof {
     c: Scalar,
     z: Scalar,
 }
 
 /// Proves `log_G(X) == log_P(Y)` for public `X`, `P`, `Y`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DleqProof {
     c: Scalar,
     z: Scalar,
 }
 
 /// Proves knowledge of `x` with `X = x·G`, bound to a context/message.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SchnorrProof {
     c: Scalar,
     z: Scalar,

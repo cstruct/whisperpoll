@@ -1,0 +1,58 @@
+[tools]
+"github:trunk-rs/trunk" = "0.21.14"
+
+[tasks.build]
+description = "Build the web client and the server"
+run = [
+  "cd crates/web && trunk build",
+  "cargo build -p whisperpoll-server",
+]
+
+[tasks.start]
+description = "Start the server and a rebuilding web client in the background"
+depends = ["build"]
+run = '''
+mise run stop >/dev/null
+root=$PWD
+mkdir -p target/dev
+cd crates/web
+nohup trunk watch </dev/null >"$root/target/dev/web.log" 2>&1 &
+echo $! >"$root/target/dev/web.pid"
+cd "$root"
+nohup target/debug/whisperpoll-server </dev/null >target/dev/server.log 2>&1 &
+echo $! >target/dev/server.pid
+echo "whisperpoll running on http://localhost:${PORT:-3000}"
+echo "logs: mise run logs   stop: mise run stop"
+'''
+
+[tasks.stop]
+description = "Stop the background server and web watcher"
+run = '''
+for name in server web; do
+  pidfile=target/dev/$name.pid
+  [ -f "$pidfile" ] || continue
+  kill "$(cat "$pidfile")" 2>/dev/null && echo "stopped $name"
+  rm -f "$pidfile"
+done
+'''
+
+[tasks.restart]
+description = "Rebuild and restart everything (needed after server changes)"
+run = "mise run start"
+
+[tasks.status]
+description = "Show whether the background processes are running"
+run = '''
+for name in server web; do
+  pidfile=target/dev/$name.pid
+  if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    echo "$name: running (pid $(cat "$pidfile"))"
+  else
+    echo "$name: stopped"
+  fi
+done
+'''
+
+[tasks.logs]
+description = "Follow the background logs"
+run = "tail -f target/dev/server.log target/dev/web.log"

@@ -1,3 +1,5 @@
 [workspace]
 resolver = "2"
-members = ["crates/core"]
+members = ["crates/core", "crates/protocol", "crates/server", "crates/web"]
+# The web client only builds for wasm32 (via trunk), so plain `cargo test` skips it.
+default-members = ["crates/core", "crates/protocol", "crates/server"]

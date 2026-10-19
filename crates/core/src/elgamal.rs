@@ -15,7 +15,7 @@ use curve25519_dalek::{
 };
 use rand_core::CryptoRngCore;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicKey(pub(crate) RistrettoPoint);
 
 pub struct SecretKey {
@@ -23,7 +23,7 @@ pub struct SecretKey {
     pk: PublicKey,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ciphertext {
     pub(crate) a: RistrettoPoint,
     pub(crate) b: RistrettoPoint,

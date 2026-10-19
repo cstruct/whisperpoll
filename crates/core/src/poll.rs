@@ -12,7 +12,7 @@ use crate::proofs::{BitProof, ValueProof};
 use crate::threshold::{self, KeyShare, PartialDecryption, TallyKey};
 use crate::{ranked, tiered};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BallotKind {
     /// Mark every day that works: one encrypted 0/1 per option.
     Approval,
@@ -47,14 +47,14 @@ pub struct Poll {
     pub key: TallyKey,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct EncryptedChoice {
     pub ciphertext: Ciphertext,
     pub proof: BitProof,
 }
 
 /// A proof about the homomorphic sum of some of a ballot's cells.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SumProof {
     /// The cells sum to exactly 1 (ranked rows and columns).
     One(ValueProof),
@@ -64,20 +64,20 @@ pub enum SumProof {
 
 /// One participant's ballot: encrypted 0/1 cells, each proven to be a bit,
 /// plus kind-specific proofs about row/column sums (none for approval).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Ballot {
     pub choices: Vec<EncryptedChoice>,
     pub sum_proofs: Vec<SumProof>,
 }
 
 /// What a voter keeps to later find their ballot on the board. Reveals nothing about the vote.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Receipt(pub [u8; 32]);
 
 /// Decrypted per-cell totals: per option for approval polls, per
 /// (option, rank) for ranked polls (see [`crate::RankedResult`]), per
 /// (option, tier) for tiered polls (see [`crate::TieredResult`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct TallyResult {
     /// How many ballots were tallied.
     pub ballots: u64,
@@ -325,6 +325,11 @@ impl BulletinBoard {
 
     pub fn ballots(&self) -> &[Ballot] {
         &self.ballots
+    }
+
+    /// Whether a trustee's partial decryption of the current aggregate is valid.
+    pub fn verify_partial(&self, partial: &PartialDecryption) -> bool {
+        threshold::verify_partial(&self.poll, &self.encrypted_tally(), partial)
     }
 
     pub fn contains(&self, receipt: &Receipt) -> bool {

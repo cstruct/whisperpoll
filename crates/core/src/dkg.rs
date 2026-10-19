@@ -44,7 +44,7 @@ pub struct TrusteeIdentity {
 }
 
 /// A trustee's public key plus proof they hold the matching secret.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Registration {
     key: RistrettoPoint,
     proof: SchnorrProof,
@@ -58,7 +58,7 @@ pub struct Ceremony {
 }
 
 /// One trustee's published contribution: commitments and encrypted shares.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Dealing {
     pub dealer: u32,
     commitments: Vec<RistrettoPoint>,
@@ -68,7 +68,7 @@ pub struct Dealing {
 }
 
 /// "Dealer sent me a bad share", with the evidence to check it publicly.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Complaint {
     pub dealer: u32,
     pub accuser: u32,
@@ -124,11 +124,40 @@ impl TrusteeIdentity {
         }
     }
 
+    /// The secret, for storing on the trustee's device.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes()
+    }
+
+    pub fn from_bytes(bytes: [u8; 32]) -> Option<Self> {
+        let secret: Option<Scalar> = Scalar::from_canonical_bytes(bytes).into();
+        secret.map(|secret| TrusteeIdentity {
+            secret,
+            public: RistrettoPoint::mul_base(&secret),
+        })
+    }
+
+    pub fn public_bytes(&self) -> [u8; 32] {
+        self.public.compress().to_bytes()
+    }
+
     pub fn register(&self, ceremony_id: &str, rng: &mut impl CryptoRngCore) -> Registration {
         Registration {
             key: self.public,
             proof: SchnorrProof::prove(&self.secret, &registration_context(ceremony_id), rng),
         }
+    }
+}
+
+impl Registration {
+    pub fn key_bytes(&self) -> [u8; 32] {
+        self.key.compress().to_bytes()
+    }
+
+    /// Checks the proof of possession, so a relay can reject bad registrations early.
+    pub fn verify(&self, ceremony_id: &str) -> bool {
+        self.proof
+            .verify(&self.key, &registration_context(ceremony_id))
     }
 }
 
@@ -529,6 +558,16 @@ mod tests {
             .map(|d| d.dealer)
             .collect();
         assert_eq!(q, vec![3]);
+    }
+
+    #[test]
+    fn identity_roundtrips_through_bytes() {
+        let id = TrusteeIdentity::generate(&mut OsRng);
+        let back = TrusteeIdentity::from_bytes(id.to_bytes()).unwrap();
+        assert_eq!(back.public_bytes(), id.public_bytes());
+        let reg = back.register("poll", &mut OsRng);
+        assert_eq!(reg.key_bytes(), id.public_bytes());
+        assert!(reg.verify("poll") && !reg.verify("other"));
     }
 
     #[test]

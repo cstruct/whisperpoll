@@ -22,7 +22,7 @@ use crate::proofs::DleqProof;
 
 /// The public side of a poll key: the encryption key plus what's needed to
 /// check trustees' partial decryptions.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct TallyKey {
     pub public_key: PublicKey,
     threshold: usize,
@@ -97,7 +97,7 @@ impl From<&SecretKey> for KeyShare {
 }
 
 /// One trustee's contribution to decrypting every cell of the tally.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PartialDecryption {
     pub trustee: u32,
     shares: Vec<RistrettoPoint>,
