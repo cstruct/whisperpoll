@@ -3,6 +3,7 @@
 
 use leptos::prelude::window;
 use rand_core::OsRng;
+use serde::{Deserialize, Serialize};
 use whisperpoll_core::{Receipt, TrusteeIdentity};
 
 use crate::util::{from_hex, to_hex};
@@ -23,6 +24,51 @@ fn set(key: &str, value: &str) {
     if let Some(s) = storage() {
         let _ = s.set_item(key, value);
     }
+}
+
+/// A poll this browser has opened, for the "your polls" lists.
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+pub struct Visited {
+    pub id: String,
+    pub token: String,
+    pub title: String,
+    /// When it was last opened, in milliseconds since the epoch.
+    pub seen: f64,
+}
+
+const POLLS: &str = "whisperpoll:polls";
+
+/// Polls opened in this browser, most recently opened first.
+pub fn visited() -> Vec<Visited> {
+    get(POLLS)
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+fn save_visited(polls: &[Visited]) {
+    set(POLLS, &serde_json::to_string(polls).unwrap());
+}
+
+/// Puts this poll first in the list (or adds it).
+pub fn remember(id: &str, token: &str, title: &str) {
+    let mut polls = visited();
+    polls.retain(|p| !(p.id == id && p.token == token));
+    polls.insert(
+        0,
+        Visited {
+            id: id.into(),
+            token: token.into(),
+            title: title.into(),
+            seen: js_sys::Date::now(),
+        },
+    );
+    save_visited(&polls);
+}
+
+pub fn forget(id: &str, token: &str) {
+    let mut polls = visited();
+    polls.retain(|p| !(p.id == id && p.token == token));
+    save_visited(&polls);
 }
 
 /// This participant's trustee identity, created on first use.

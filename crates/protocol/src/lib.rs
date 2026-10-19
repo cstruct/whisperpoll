@@ -142,6 +142,22 @@ pub struct RoundView {
     pub winner: Option<usize>,
 }
 
+/// `GET /api/polls/{id}/summary?t={token}`: a poll at a glance, for one
+/// participant's "your polls" list.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PollSummary {
+    pub title: String,
+    /// This participant's name.
+    pub you: String,
+    pub phase: Phase,
+    /// Canonical slot text of every time picked so far.
+    pub picked: Vec<String>,
+    /// Something is waiting on this participant (suggest, vote, or their
+    /// device's key or decryption step).
+    pub your_turn: bool,
+    pub participants: usize,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ClientMsg {
     Register(Registration),

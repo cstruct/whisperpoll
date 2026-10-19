@@ -8,7 +8,7 @@ the server) and a result anyone can check.
   generation, and threshold decryption.
 - `crates/protocol`: messages between server and browser.
 - `crates/server`: an axum websocket relay and public bulletin board. It
-  never holds a key.
+  never holds a key. Polls live in Redis (or in memory without one).
 - `crates/web`: the Leptos (CSR) client. All cryptography runs in the
   browser.
 
@@ -37,6 +37,27 @@ cargo run -p whisperpoll-server
 
 To try a poll alone, open each invite link in its own tab. Keys are stored
 per invite, so one browser can play every participant.
+
+Polls you've opened are listed under "Your polls" (`/history`), and the
+running ones on the start page, so you can get back to them.
+
+### Storage
+
+Without `REDIS_URL` the server keeps polls in memory: fine for development,
+but a restart loses them and only one server can run. With it, polls are
+stored in Redis and any number of servers can share them:
+
+```sh
+redis-server --port 6379 &
+REDIS_URL=redis://127.0.0.1:6379 mise run start
+```
+
+Each poll is a JSON document that expires a week after its last change.
+Changes take a short per-poll lock, so two servers can't overwrite each
+other, and are announced over Redis pub/sub so every server refreshes its
+connections. Who's online (which decides who gets push notifications) is
+kept in Redis too, renewed by heartbeats, so a crashed server's connections
+time out after a minute.
 
 ## iOS app
 
@@ -72,12 +93,14 @@ can't handle the Cargo workspace, so create the app and deploy directly:
 
 ```sh
 fly apps create <your-app-name>   # then set `app` in fly.toml to match
-fly deploy --ha=false
+fly redis create                  # Upstash Redis; note the redis:// URL it prints
+fly secrets set REDIS_URL=<that URL>
+fly deploy
 ```
 
-`--ha=false` keeps it to a single machine. Polls are kept in memory only, so
-a second machine would split polls between them, and every deploy or restart
-clears all polls.
+With `REDIS_URL` set, polls survive deploys and restarts, and Fly's default
+two machines share them. Without it, deploy with `fly deploy --ha=false`:
+each machine would have its own polls, and every deploy clears them.
 
 ## Tests
 

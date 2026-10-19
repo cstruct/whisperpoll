@@ -9,6 +9,8 @@ primary_region = 'arn'
 [build]
   dockerfile = 'Dockerfile'
 
+# Polls live in Redis (the REDIS_URL secret, see the README), so any number
+# of machines can serve them and deploys don't lose them.
 [env]
   PORT = '8080'
 

@@ -255,6 +255,71 @@ progress {
   font-weight: 600;
 }
 
+.crumbs {
+  display: flex;
+  gap: 14px;
+}
+
+.crumbs a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.crumbs a:hover {
+  color: var(--accent);
+}
+
+.row.spread {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.poll-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.poll-list > li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.poll-list > li:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.poll-list .poll-title {
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.poll-list a.poll-title:hover {
+  color: var(--accent);
+}
+
+.poll-list .status {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.poll-list .picked {
+  font-size: 0.875rem;
+  margin-top: 4px;
+}
+
+.poll-list li.expired .poll-title {
+  color: var(--muted);
+}
+
 .whoami {
   display: flex;
   align-items: center;

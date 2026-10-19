@@ -62,6 +62,8 @@ class _WhisperpollAppState extends State<WhisperpollApp> {
     await _navigator.currentState?.push(
       MaterialPageRoute<void>(builder: (_) => PollScreen(invite: invite)),
     );
+    // Its status has likely changed.
+    Invites.changed.notify();
   }
 
   @override

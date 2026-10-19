@@ -3,6 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use rand_core::{OsRng, RngCore};
 
 use crate::push::{Device, Push};
@@ -12,8 +14,8 @@ use whisperpoll_core::{
 };
 use whisperpoll_protocol::slot::Slot;
 use whisperpoll_protocol::{
-    round_winner, CeremonyView, ClientMsg, InviteLink, ParticipantView, Phase, PollView, RoundView,
-    SlotSuggestion, BALLOT_KIND,
+    round_winner, CeremonyView, ClientMsg, InviteLink, ParticipantView, Phase, PollSummary,
+    PollView, RoundView, SlotSuggestion, BALLOT_KIND,
 };
 
 const MAX_NAME: usize = 40;
@@ -24,7 +26,7 @@ const MAX_DEVICES: usize = 5;
 
 /// What a participant's device is needed for right now. A push goes out
 /// once per need, and only while they're offline.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Need {
     SuggestTimes,
     Deal { attempt: u32 },
@@ -34,19 +36,19 @@ enum Need {
     Results,
 }
 
+#[derive(Serialize, Deserialize)]
 struct Member {
     name: String,
     token: String,
     creator: bool,
     registration: Option<Registration>,
-    online: usize,
     devices: Vec<Device>,
     /// The last need a push went out for.
     notified: Option<Need>,
 }
 
 /// One round of voting and tallying, looking for one day.
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct Round {
     /// Each member's current ballot, carried over from the previous round
     /// until they replace it.
@@ -69,6 +71,7 @@ impl Round {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct KeyCeremony {
     ceremony: Ceremony,
     attempt: u32,
@@ -79,6 +82,12 @@ struct KeyCeremony {
     complaints: Vec<Option<Vec<Complaint>>>,
 }
 
+/// Participants (by index) with a live connection right now. Tracked by the
+/// storage layer, not stored in the room, so that a crashed server can't
+/// leave anyone looking online.
+pub type Online = BTreeSet<usize>;
+
+#[derive(Serialize, Deserialize)]
 pub struct Room {
     id: String,
     title: String,
@@ -124,7 +133,6 @@ impl Room {
                 token: token.clone(),
                 creator: true,
                 registration: None,
-                online: 0,
                 devices: Vec::new(),
                 notified: None,
             }],
@@ -141,15 +149,6 @@ impl Room {
 
     pub fn member_by_token(&self, token: &str) -> Option<usize> {
         self.members.iter().position(|m| m.token == token)
-    }
-
-    pub fn set_online(&mut self, who: usize, online: bool) {
-        let m = &mut self.members[who];
-        m.online = if online {
-            m.online + 1
-        } else {
-            m.online.saturating_sub(1)
-        };
     }
 
     fn require_creator(&self, who: usize) -> Result<(), String> {
@@ -305,7 +304,6 @@ impl Room {
             token: random_token(),
             creator: false,
             registration: None,
-            online: 0,
             devices: Vec::new(),
             notified: None,
         });
@@ -605,14 +603,14 @@ impl Room {
 
     /// Pushes now due: one per new need of each offline participant who has
     /// a device. Call after every change, including someone going offline.
-    pub fn pushes(&mut self) -> Vec<(Vec<Device>, Push)> {
+    pub fn pushes(&mut self, online: &Online) -> Vec<(Vec<Device>, Push)> {
         let mut due = Vec::new();
         for who in 0..self.members.len() {
             let Some(need) = self.need(who) else {
                 continue;
             };
             let m = &self.members[who];
-            if m.online > 0 || m.devices.is_empty() || m.notified == Some(need) {
+            if online.contains(&who) || m.devices.is_empty() || m.notified == Some(need) {
                 continue;
             }
             due.push((m.devices.clone(), self.push_for(need)));
@@ -621,7 +619,23 @@ impl Room {
         due
     }
 
-    pub fn view(&self, who: usize) -> PollView {
+    pub fn summary(&self, who: usize) -> PollSummary {
+        PollSummary {
+            title: self.title.clone(),
+            you: self.members[who].name.clone(),
+            phase: self.phase.clone(),
+            picked: self
+                .rounds
+                .iter()
+                .filter_map(|r| r.winner)
+                .map(|o| self.options[o].clone())
+                .collect(),
+            your_turn: !matches!(self.need(who), None | Some(Need::Results)),
+            participants: self.members.len(),
+        }
+    }
+
+    pub fn view(&self, who: usize, online: &Online) -> PollView {
         let creator = self.members[who].creator;
         PollView {
             id: self.id.clone(),
@@ -635,7 +649,7 @@ impl Room {
                 .map(|(i, m)| ParticipantView {
                     name: m.name.clone(),
                     creator: m.creator,
-                    online: m.online > 0,
+                    online: online.contains(&i),
                     registration: m.registration.clone(),
                     has_ballot: self
                         .rounds
@@ -708,8 +722,8 @@ mod tests {
             let name = name.into();
             room.apply(0, ClientMsg::Invite { name }).unwrap();
         }
-        assert_eq!(room.view(0).invites.len(), 2);
-        assert!(room.view(1).invites.is_empty());
+        assert_eq!(room.view(0, &Online::new()).invites.len(), 2);
+        assert!(room.view(1, &Online::new()).invites.is_empty());
 
         let ids: Vec<_> = (0..3)
             .map(|_| TrusteeIdentity::generate(&mut OsRng))
@@ -734,7 +748,7 @@ mod tests {
         assert!(room.apply(1, start.clone()).is_err());
         room.apply(0, start).unwrap();
         assert_eq!(
-            room.view(0).options,
+            room.view(0, &Online::new()).options,
             [
                 "2026-10-24T18:00+02:00/120",
                 "2026-10-25T18:00+02:00/120",
@@ -744,7 +758,7 @@ mod tests {
 
         // ...and deals and checks shares, until the key is ready.
         settle(&mut room, &ids);
-        assert_eq!(room.view(0).phase, Phase::Voting);
+        assert_eq!(room.view(0, &Online::new()).phase, Phase::Voting);
         (room, ids)
     }
 
@@ -756,7 +770,7 @@ mod tests {
         loop {
             let mut progressed = false;
             for (who, id) in ids.iter().enumerate() {
-                let view = room.view(who);
+                let view = room.view(who, &Online::new());
                 let step = next_step(&view, id, |k| sent[who].contains(k), &mut OsRng);
                 if let Some(step) = step {
                     sent[who].insert(step.key);
@@ -771,7 +785,7 @@ mod tests {
     }
 
     fn ballot(room: &Room, choices: &[Option<usize>]) -> Ballot {
-        let poll = room.view(0).poll().unwrap();
+        let poll = room.view(0, &Online::new()).poll().unwrap();
         cast_tiered_ballot(&poll, choices, &mut OsRng).unwrap()
     }
 
@@ -781,7 +795,7 @@ mod tests {
     }
 
     fn decrypt(room: &mut Room, ids: &[TrusteeIdentity], who: usize) {
-        let v = room.view(who);
+        let v = room.view(who, &Online::new());
         let c = v.ceremony.as_ref().unwrap();
         let share = v
             .ceremony()
@@ -794,7 +808,7 @@ mod tests {
 
     /// What a browser does to check a finished round on its own.
     fn verified_result(room: &Room, round: usize) -> (TieredResult, Option<usize>) {
-        let v = room.view(0);
+        let v = room.view(0, &Online::new());
         let board = v.board_for(round).unwrap();
         let r = &v.rounds[round - 1];
         let tally = r.tally.as_ref().unwrap();
@@ -820,21 +834,21 @@ mod tests {
         vote(&mut room, 1, &[X, P, P]);
         vote(&mut room, 2, &[IN, P, OK]);
         // Everyone voted, so voting closed by itself.
-        assert_eq!(room.view(0).phase, Phase::Tallying);
-        assert_eq!(room.view(0).rounds[0].ballots.len(), 3);
+        assert_eq!(room.view(0, &Online::new()).phase, Phase::Tallying);
+        assert_eq!(room.view(0, &Online::new()).rounds[0].ballots.len(), 3);
 
         // Trustees 1 and 3 decrypt; 2 turns up late, which is harmless.
         decrypt(&mut room, &ids, 0);
         decrypt(&mut room, &ids, 2);
         decrypt(&mut room, &ids, 1);
 
-        let v = room.view(1);
+        let v = room.view(1, &Online::new());
         assert_eq!(v.phase, Phase::Done);
         assert_eq!(v.rounds[0].partials.len(), 2);
         let (result, winner) = verified_result(&room, 1);
         assert_eq!(result.available, vec![2, 3, 2]);
         assert_eq!(winner, Some(1));
-        assert_eq!(room.view(0).picked(), [1]);
+        assert_eq!(room.view(0, &Online::new()).picked(), [1]);
     }
 
     #[test]
@@ -848,7 +862,7 @@ mod tests {
         assert_eq!(verified_result(&room, 1).1, Some(1));
 
         // Round 2 opens with everyone's ballot carried over, not yet confirmed.
-        let v = room.view(0);
+        let v = room.view(0, &Online::new());
         assert_eq!((v.phase.clone(), v.rounds.len()), (Phase::Voting, 2));
         assert!(v.participants.iter().all(|p| p.has_ballot && !p.voted));
         assert_eq!(v.rounds[1].ballots, v.rounds[0].ballots);
@@ -860,9 +874,9 @@ mod tests {
         // bob now prefers Fri; alice and carol keep their votes.
         vote(&mut room, 1, &[P, X, X]);
         room.apply(0, ClientMsg::KeepVote).unwrap();
-        assert_eq!(room.view(0).phase, Phase::Voting);
+        assert_eq!(room.view(0, &Online::new()).phase, Phase::Voting);
         room.apply(2, ClientMsg::KeepVote).unwrap();
-        assert_eq!(room.view(0).phase, Phase::Tallying);
+        assert_eq!(room.view(0, &Online::new()).phase, Phase::Tallying);
 
         decrypt(&mut room, &ids, 2);
         decrypt(&mut room, &ids, 0);
@@ -870,7 +884,7 @@ mod tests {
         // Everyone can make Fri now; Sat is already picked anyway.
         assert_eq!(result.available, vec![3, 2, 1]);
         assert_eq!(winner, Some(0));
-        let v = room.view(0);
+        let v = room.view(0, &Online::new());
         assert_eq!(v.phase, Phase::Done);
         assert_eq!(v.picked(), [1, 0]);
     }
@@ -883,13 +897,13 @@ mod tests {
         }
         decrypt(&mut room, &ids, 0);
         decrypt(&mut room, &ids, 1);
-        assert_eq!(room.view(0).rounds[0].winner, Some(1));
+        assert_eq!(room.view(0, &Online::new()).rounds[0].winner, Some(1));
 
         // Round 2: only Sat works for anyone, and Sat is taken.
         assert!(room.apply(0, ClientMsg::CloseVoting).is_ok());
         decrypt(&mut room, &ids, 1);
         decrypt(&mut room, &ids, 2);
-        let v = room.view(0);
+        let v = room.view(0, &Online::new());
         assert_eq!(verified_result(&room, 2).1, None);
         // No third round after a round that found nothing.
         assert_eq!((v.phase.clone(), v.rounds.len()), (Phase::Done, 2));
@@ -921,13 +935,13 @@ mod tests {
         room.apply(0, start).unwrap();
 
         // alice deals right away; bob's chat-app browser is already closed.
-        let c = room.view(0).ceremony().unwrap();
+        let c = room.view(0, &Online::new()).ceremony().unwrap();
         let stale = c.deal(&alice, &mut OsRng).unwrap();
         room.apply(0, ClientMsg::Deal(stale.clone())).unwrap();
 
         // bob's real browser registers its own key: the ceremony restarts.
         room.apply(1, register(&bob_browser)).unwrap();
-        let v = room.view(0);
+        let v = room.view(0, &Online::new());
         let cv = v.ceremony.as_ref().unwrap();
         assert_eq!((cv.attempt, cv.dealings.len()), (1, 0));
         let c = v.ceremony().unwrap();
@@ -947,7 +961,7 @@ mod tests {
             let dealing = c.deal(id, &mut OsRng).unwrap();
             room.apply(who, ClientMsg::Deal(dealing)).unwrap();
         }
-        let dealings = room.view(0).ceremony.unwrap().dealings;
+        let dealings = room.view(0, &Online::new()).ceremony.unwrap().dealings;
         for (who, id) in [(0, &alice), (1, &bob_browser)] {
             let complaints = c.check_dealings(id, &dealings, &mut OsRng).unwrap();
             let checked = ClientMsg::Checked {
@@ -956,7 +970,7 @@ mod tests {
             };
             room.apply(who, checked).unwrap();
         }
-        assert_eq!(room.view(0).phase, Phase::Voting);
+        assert_eq!(room.view(0, &Online::new()).phase, Phase::Voting);
 
         // Once voting is open, keys are fixed.
         assert!(room.apply(1, register(&bob_chat_app)).is_err());
@@ -965,6 +979,7 @@ mod tests {
     #[test]
     fn moving_on_to_times_pushes_to_invitees() {
         let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
+        let online = Online::new();
         room.apply(0, ClientMsg::Invite { name: "bob".into() })
             .unwrap();
         let device = ClientMsg::RegisterDevice {
@@ -973,11 +988,11 @@ mod tests {
         };
         room.apply(1, device).unwrap();
         assert!(
-            room.pushes().is_empty(),
+            room.pushes(&online).is_empty(),
             "nothing to do while alice invites"
         );
         room.apply(0, ClientMsg::FinishInviting).unwrap();
-        let pushes = room.pushes();
+        let pushes = room.pushes(&online);
         assert_eq!(pushes.len(), 1);
         assert!(pushes[0].1.body.contains("Suggest times"));
     }
@@ -985,6 +1000,7 @@ mod tests {
     #[test]
     fn pushes_go_to_offline_participants_once_per_need() {
         let (mut room, ids) = setup(1);
+        let mut online = Online::new();
         let device = |token: &str| ClientMsg::RegisterDevice {
             platform: whisperpoll_protocol::PushPlatform::Apns,
             token: token.into(),
@@ -993,26 +1009,26 @@ mod tests {
         // carol has none.
         room.apply(1, device("b0b")).unwrap();
         room.apply(0, device("a11ce")).unwrap();
-        room.set_online(0, true);
+        online.insert(0);
 
-        let pushes = room.pushes();
+        let pushes = room.pushes(&online);
         assert_eq!(pushes.len(), 1);
         let (devices, push) = &pushes[0];
         assert_eq!(devices[0].token, "b0b");
         assert!(push.body.contains("Voting is open") && !push.wake);
-        assert!(room.pushes().is_empty(), "one push per need");
+        assert!(room.pushes(&online).is_empty(), "one push per need");
 
         for (who, choices) in [[P, OK, X], [X, P, P], [IN, P, OK]].iter().enumerate() {
             vote(&mut room, who, choices);
         }
         // Revealing the result needs bob's phone: wake it.
-        let pushes = room.pushes();
+        let pushes = room.pushes(&online);
         assert_eq!(pushes.len(), 1);
         assert!(pushes[0].1.wake && pushes[0].1.body.contains("reveal"));
 
         decrypt(&mut room, &ids, 0);
         decrypt(&mut room, &ids, 2);
-        let pushes = room.pushes();
+        let pushes = room.pushes(&online);
         assert_eq!(pushes.len(), 1);
         assert_eq!(
             pushes[0].1.body,
@@ -1020,8 +1036,8 @@ mod tests {
         );
 
         // alice gets it too once she goes offline.
-        room.set_online(0, false);
-        let pushes = room.pushes();
+        online.remove(&0);
+        let pushes = room.pushes(&online);
         assert_eq!((pushes.len(), pushes[0].0[0].token.as_str()), (1, "a11ce"));
     }
 
@@ -1039,7 +1055,12 @@ mod tests {
         // Same day, later time: a separate slot. A repeat is ignored.
         suggest(&mut room, "2026-10-24T21:00+02:00/90");
         suggest(&mut room, "2026-10-24T21:00+02:00/90");
-        let slots: Vec<String> = room.view(0).slots.into_iter().map(|s| s.slot).collect();
+        let slots: Vec<String> = room
+            .view(0, &Online::new())
+            .slots
+            .into_iter()
+            .map(|s| s.slot)
+            .collect();
         assert_eq!(
             slots,
             [

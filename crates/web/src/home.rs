@@ -3,6 +3,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use whisperpoll_protocol::{CreatePoll, Created};
 
+use crate::history::PollList;
+use crate::store;
+
 async fn create_poll(req: CreatePoll) -> Result<Created, String> {
     let resp = gloo_net::http::Request::post("/api/polls")
         .json(&req)
@@ -25,6 +28,7 @@ pub fn Home() -> impl IntoView {
     let name = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let busy = RwSignal::new(false);
+    let has_polls = !store::visited().is_empty();
 
     let submit = move |ev: SubmitEvent| {
         ev.prevent_default();
@@ -58,6 +62,15 @@ pub fn Home() -> impl IntoView {
                     "and a result everyone can check."
                 </p>
             </header>
+            {has_polls.then(|| view! {
+                <section class="card stack">
+                    <div class="row spread">
+                        <h2>"Running polls"</h2>
+                        <a class="button-link" href="/history">"All your polls"</a>
+                    </div>
+                    <PollList running_only=true />
+                </section>
+            })}
             <form class="card stack" on:submit=submit>
                 <h2>"Start a poll"</h2>
                 <label class="field">

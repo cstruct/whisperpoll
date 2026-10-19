@@ -2,6 +2,7 @@
 //! leave the browser, and every result is re-verified locally.
 
 mod auto;
+mod history;
 mod home;
 mod net;
 mod poll_page;
@@ -27,6 +28,7 @@ fn App() -> impl IntoView {
         (Some(id), Some(token)) if !id.is_empty() => {
             view! { <poll_page::PollPage id=id.to_string() token=token /> }.into_any()
         }
+        _ if path == "/history" => view! { <history::History /> }.into_any(),
         _ => view! { <home::Home /> }.into_any(),
     }
 }

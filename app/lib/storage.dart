@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show ChangeNotifier;
 import 'package:flutter/material.dart' show TimeOfDay;
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -32,6 +33,9 @@ class Invite {
 
   Uri get checkUrl =>
       Uri.parse('$server/api/polls/$poll/check').replace(queryParameters: {'t': token});
+
+  Uri get summaryUrl =>
+      Uri.parse('$server/api/polls/$poll/summary').replace(queryParameters: {'t': token});
 
   /// Accepts the web link (`https://host/p/<poll>?t=<token>`) or the app's
   /// own (`whisperpoll://p/<poll>?t=<token>&server=<https://host>`).
@@ -84,6 +88,10 @@ class SlotDefaults {
 class Invites {
   static const _key = 'invites';
 
+  /// Notifies when the list changes or a poll was just left, so lists of
+  /// polls can refresh.
+  static final changed = _Changed();
+
   static Future<List<Invite>> all() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_key) ?? [];
@@ -109,7 +117,12 @@ class Invites {
   static Future<void> _write(List<Invite> list) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_key, [for (final i in list) jsonEncode(i.toJson())]);
+    changed.notify();
   }
+}
+
+class _Changed extends ChangeNotifier {
+  void notify() => notifyListeners();
 }
 
 /// This device's secrets and memories per invite: the trustee key (in the

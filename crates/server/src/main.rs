@@ -1,13 +1,14 @@
 //! whisperpoll server: serves the web client and relays poll messages over
-//! websockets. State is in memory only.
+//! websockets. Polls live in Redis when `REDIS_URL` is set (so several
+//! machines can serve them), in memory otherwise; see `store`.
 
 mod push;
 mod room;
+mod store;
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -19,19 +20,14 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::broadcast;
 use tower_http::services::{ServeDir, ServeFile};
-use whisperpoll_protocol::{ClientMsg, CreatePoll, Created, ServerMsg};
+use whisperpoll_protocol::{ClientMsg, CreatePoll, Created, PollSummary, ServerMsg};
 
 use room::{random_token, Room};
-
-struct Entry {
-    room: Room,
-    /// Pinged after every change; each connection then sends its own view.
-    changed: broadcast::Sender<()>,
-}
+use store::{Store, HEARTBEAT};
 
 #[derive(Clone)]
 struct AppState {
-    polls: Arc<Mutex<HashMap<String, Entry>>>,
+    store: Store,
     notifier: Arc<dyn push::Notifier>,
 }
 
@@ -44,15 +40,18 @@ async fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
+    let store = Store::from_env().await.expect("couldn't connect to Redis");
+    let polls = store.describe();
 
     let static_files = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
     let app = Router::new()
         .route("/api/polls", post(create_poll))
         .route("/api/polls/{id}/check", get(check))
+        .route("/api/polls/{id}/summary", get(summary))
         .route("/ws/{id}", get(connect))
         .fallback_service(static_files)
         .with_state(AppState {
-            polls: Arc::default(),
+            store,
             notifier: push::from_env(),
         });
 
@@ -63,8 +62,16 @@ async fn main() {
         .unwrap_or([127, 0, 0, 1].into());
     let addr = SocketAddr::from((host, port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    println!("whisperpoll on http://{addr} (serving {})", dist.display());
+    println!(
+        "whisperpoll on http://{addr} (serving {}, polls {polls})",
+        dist.display()
+    );
     axum::serve(listener, app).await.unwrap();
+}
+
+fn storage_error(e: String) -> (StatusCode, String) {
+    eprintln!("{e}");
+    (StatusCode::SERVICE_UNAVAILABLE, e)
 }
 
 async fn create_poll(
@@ -74,12 +81,11 @@ async fn create_poll(
     let id = random_token()[..12].to_string();
     let (room, token) =
         Room::new(id.clone(), &req.title, &req.name).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    let (changed, _) = broadcast::channel(64);
     state
-        .polls
-        .lock()
-        .unwrap()
-        .insert(id.clone(), Entry { room, changed });
+        .store
+        .create(&id, &room)
+        .await
+        .map_err(storage_error)?;
     Ok(Json(Created { id, token }))
 }
 
@@ -95,10 +101,31 @@ async fn check(
     Path(id): Path<String>,
     Query(join): Query<Join>,
 ) -> StatusCode {
-    let polls = state.polls.lock().unwrap();
-    match polls.get(&id).and_then(|e| e.room.member_by_token(&join.t)) {
-        Some(_) => StatusCode::NO_CONTENT,
-        None => StatusCode::NOT_FOUND,
+    match state
+        .store
+        .read(&id, |r, _| r.member_by_token(&join.t))
+        .await
+    {
+        Ok(Some(Some(_))) => StatusCode::NO_CONTENT,
+        Ok(_) => StatusCode::NOT_FOUND,
+        Err(e) => storage_error(e).0,
+    }
+}
+
+/// A short status of the poll for invite `t`, for history and resume lists.
+async fn summary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(join): Query<Join>,
+) -> Result<Json<PollSummary>, (StatusCode, String)> {
+    let summary = state
+        .store
+        .read(&id, |r, _| Some(r.summary(r.member_by_token(&join.t)?)))
+        .await
+        .map_err(storage_error)?;
+    match summary.flatten() {
+        Some(summary) => Ok(Json(summary)),
+        None => Err((StatusCode::NOT_FOUND, "unknown poll or invite".into())),
     }
 }
 
@@ -108,25 +135,15 @@ async fn connect(
     Path(id): Path<String>,
     Query(join): Query<Join>,
 ) -> Response {
-    let who = {
-        let polls = state.polls.lock().unwrap();
-        polls.get(&id).and_then(|e| e.room.member_by_token(&join.t))
-    };
-    match who {
-        Some(who) => ws.on_upgrade(move |socket| session(socket, state, id, who)),
-        None => (StatusCode::NOT_FOUND, "unknown poll or invite").into_response(),
+    match state
+        .store
+        .read(&id, |r, _| r.member_by_token(&join.t))
+        .await
+    {
+        Ok(Some(Some(who))) => ws.on_upgrade(move |socket| session(socket, state, id, who)),
+        Ok(_) => (StatusCode::NOT_FOUND, "unknown poll or invite").into_response(),
+        Err(e) => storage_error(e).into_response(),
     }
-}
-
-/// Runs `f` on the room and returns its result plus the change notifier.
-fn with_room<T>(
-    state: &AppState,
-    id: &str,
-    f: impl FnOnce(&mut Room) -> T,
-) -> Option<(T, broadcast::Sender<()>)> {
-    let mut polls = state.polls.lock().unwrap();
-    let entry = polls.get_mut(id)?;
-    Some((f(&mut entry.room), entry.changed.clone()))
 }
 
 fn encode(msg: &ServerMsg) -> Message {
@@ -135,11 +152,13 @@ fn encode(msg: &ServerMsg) -> Message {
 
 async fn session(socket: WebSocket, state: AppState, id: String, who: usize) {
     let (mut sink, mut stream) = socket.split();
-    let Some(((), changed)) = with_room(&state, &id, |r| r.set_online(who, true)) else {
-        return;
-    };
-    let mut updates = changed.subscribe();
-    let _ = changed.send(());
+    let store = &state.store;
+    let conn_id = random_token();
+    let mut updates = store.subscribe(&id);
+    store.set_online(&id, who, &conn_id, true).await;
+    // Everyone sees them come online, and they get their first view.
+    store.notify(&id).await;
+    let mut heartbeat = tokio::time::interval(HEARTBEAT);
 
     loop {
         tokio::select! {
@@ -150,40 +169,43 @@ async fn session(socket: WebSocket, state: AppState, id: String, who: usize) {
                     Some(Ok(_)) => continue,
                 };
                 let result = match serde_json::from_str::<ClientMsg>(&text) {
-                    Ok(msg) => with_room(&state, &id, |r| {
-                        let result = r.apply(who, msg);
-                        (result, r.pushes())
-                    })
-                    .map(|((result, pushes), _)| {
-                        send_pushes(&state, pushes);
-                        result
-                    }),
-                    Err(e) => Some(Err(format!("malformed message: {e}"))),
+                    Ok(msg) => store
+                        .update(&id, |r, online| (r.apply(who, msg), r.pushes(online)))
+                        .await
+                        .map(|done| {
+                            done.map(|(result, pushes)| {
+                                send_pushes(&state, pushes);
+                                result
+                            })
+                        }),
+                    Err(e) => Ok(Some(Err(format!("malformed message: {e}")))),
                 };
-                match result {
-                    Some(Ok(())) => { let _ = changed.send(()); }
-                    Some(Err(e)) => {
-                        if sink.send(encode(&ServerMsg::Error(e))).await.is_err() { break; }
-                    }
-                    None => break,
-                }
+                let error = match result {
+                    Ok(Some(Ok(()))) => continue,
+                    Ok(Some(Err(e))) | Err(e) => e,
+                    // The poll expired under us.
+                    Ok(None) => break,
+                };
+                if sink.send(encode(&ServerMsg::Error(error))).await.is_err() { break; }
             }
             update = updates.recv() => {
                 if let Err(broadcast::error::RecvError::Closed) = update { break; }
-                let Some((view, _)) = with_room(&state, &id, |r| r.view(who)) else { break };
+                let view = match store.read(&id, |r, online| r.view(who, online)).await {
+                    Ok(Some(view)) => view,
+                    Ok(None) => break,
+                    Err(e) => { eprintln!("{e}"); continue; }
+                };
                 if sink.send(encode(&ServerMsg::State(Box::new(view)))).await.is_err() { break; }
             }
+            _ = heartbeat.tick() => store.set_online(&id, who, &conn_id, true).await,
         }
     }
 
-    let gone = with_room(&state, &id, |r| {
-        r.set_online(who, false);
-        r.pushes()
-    });
-    if let Some((pushes, _)) = gone {
-        // They may have left with something to do: that's what pushes are for.
+    store.set_online(&id, who, &conn_id, false).await;
+    // They may have left with something to do: that's what pushes are for.
+    // The update also tells everyone they went offline.
+    if let Ok(Some(pushes)) = store.update(&id, |r, online| r.pushes(online)).await {
         send_pushes(&state, pushes);
-        let _ = changed.send(());
     }
 }
 

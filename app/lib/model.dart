@@ -69,8 +69,12 @@ class PollView {
   int get me => json['me'] as int;
   int get days => json['days'] as int;
 
-  Phase get phase {
-    final p = json['phase'];
+  Phase get phase => parsePhase(json['phase']);
+
+  String? get failure => parseFailure(json['phase']);
+
+  /// A `Phase` as the server sends it (also in poll summaries).
+  static Phase parsePhase(Object? p) {
     return switch (p) {
       'Inviting' => Phase.inviting,
       'Gathering' => Phase.gathering,
@@ -82,10 +86,8 @@ class PollView {
     };
   }
 
-  String? get failure {
-    final p = json['phase'];
-    return p is Map ? (p['Failed'] as Map)['reason'] as String : null;
-  }
+  static String? parseFailure(Object? p) =>
+      p is Map ? (p['Failed'] as Map)['reason'] as String : null;
 
   List<Participant> get participants =>
       [for (final p in json['participants'] as List) Participant(p as Map<String, dynamic>)];

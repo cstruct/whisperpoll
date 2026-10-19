@@ -50,7 +50,7 @@ pub struct Registration {
     proof: SchnorrProof,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ceremony {
     threshold: usize,
     trustees: Vec<RistrettoPoint>,

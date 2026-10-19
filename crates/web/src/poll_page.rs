@@ -37,16 +37,29 @@ pub fn PollPage(id: String, token: String) -> impl IntoView {
         id: id.clone(),
         token: token.clone(),
     });
-    net::connect(id, token.clone(), conn);
-    Effect::new(move |_| {
-        conn.state.with(|s| {
-            if let Some(view) = s {
-                auto::run(view, &token);
-            }
-        })
+    net::connect(id.clone(), token.clone(), conn);
+    Effect::new({
+        let token = token.clone();
+        move |_| {
+            conn.state.with(|s| {
+                if let Some(view) = s {
+                    auto::run(view, &token);
+                }
+            })
+        }
     });
 
     let phase = Memo::new(move |_| read(conn, None, |v| Some(v.phase.clone())));
+    // Remember the poll for the "your polls" lists, under its latest title.
+    let title = Memo::new(move |_| read(conn, None, |v| Some(v.title.clone())));
+    Effect::new({
+        let id = id.clone();
+        move |_| {
+            if let Some(title) = title.get() {
+                store::remember(&id, &token, &title);
+            }
+        }
+    });
 
     view! {
         <main class="page">
@@ -114,7 +127,10 @@ fn Header() -> impl IntoView {
     view! {
         <header class="poll-header">
             <div>
-                <a class="brand" href="/">"whisperpoll"</a>
+                <nav class="crumbs">
+                    <a class="brand" href="/">"whisperpoll"</a>
+                    <a href="/history">"Your polls"</a>
+                </nav>
                 <h1>{title}</h1>
             </div>
             <div class="whoami">

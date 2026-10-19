@@ -17,7 +17,7 @@ use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use whisperpoll_protocol::PushPlatform;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Device {
     pub platform: PushPlatform,
     pub token: String,

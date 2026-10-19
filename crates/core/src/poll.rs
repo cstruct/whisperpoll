@@ -39,7 +39,7 @@ impl BallotKind {
 }
 
 /// A poll's public parameters. `options` are the candidate days.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Poll {
     pub id: String,
     pub options: Vec<String>,
@@ -299,7 +299,7 @@ pub fn cast_ballot(
 
 /// Public, append-only list of ballots. In the webapp this is what the server
 /// publishes; here it's in memory.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BulletinBoard {
     pub poll: Poll,
     ballots: Vec<Ballot>,
