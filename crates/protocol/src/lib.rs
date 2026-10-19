@@ -23,6 +23,8 @@
 //! them. Days already picked can't win again; a round where no remaining day
 //! works for anyone picks nothing and ends the poll.
 
+pub mod calendar;
+
 use serde::{Deserialize, Serialize};
 use whisperpoll_core::{
     Ballot, BallotKind, BulletinBoard, Ceremony, Complaint, Dealing, PartialDecryption, Poll,

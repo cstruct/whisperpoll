@@ -546,6 +546,23 @@ details.round[open] > .stack {
   margin-top: 14px;
 }
 
+.calendar {
+  margin-top: 14px;
+  align-items: center;
+}
+
+.button-link {
+  color: var(--accent);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 5px 4px;
+}
+
+.button-link:hover {
+  text-decoration: underline;
+}
+
 .picked {
   margin: 8px 0 0;
   padding-left: 22px;

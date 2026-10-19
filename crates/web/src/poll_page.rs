@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use rand_core::OsRng;
 use web_sys::HtmlInputElement;
 use whisperpoll_core::{cast_tiered_ballot, verify_tally, TieredResult};
+use whisperpoll_protocol::calendar::{self, Event};
 use whisperpoll_protocol::{round_winner, ClientMsg, Phase, PollView, TIERS};
 
 use crate::net::{self, Conn};
@@ -967,6 +968,82 @@ fn PickedSoFar() -> impl IntoView {
     }
 }
 
+/// "Add to calendar" for the picked days: one `.ics` with all of them, plus a
+/// Google Calendar link per day. Built entirely in the browser.
+#[component]
+fn CalendarExport(outcomes: Vec<Outcome>) -> impl IntoView {
+    let conn = session().conn;
+    let (title, id) = conn.state.with_untracked(|st| {
+        st.as_ref()
+            .map(|v| (v.title.clone(), v.id.clone()))
+            .unwrap_or_default()
+    });
+    let picks: Vec<(String, String)> = outcomes
+        .iter()
+        .filter_map(|o| {
+            let (date, available) = o.winner.as_ref()?;
+            let note = format!(
+                "{available} of {} can make it. Picked with whisperpoll.",
+                o.ballots
+            );
+            Some((date.clone(), note))
+        })
+        .collect();
+    if picks.is_empty() {
+        return ().into_any();
+    }
+    let all = picks.clone();
+    let label = if all.len() == 1 {
+        "Add to calendar (.ics)".to_string()
+    } else {
+        format!("Add all {} to calendar (.ics)", all.len())
+    };
+    let download = {
+        let (title, id) = (title.clone(), id.clone());
+        move |_| {
+            let events: Vec<Event> = all
+                .iter()
+                .map(|(date, note)| Event {
+                    date,
+                    description: note.clone(),
+                })
+                .collect();
+            let ics = calendar::ics(&title, &id, &util::utc_stamp(), &events);
+            let name = format!("{}.ics", util::file_slug(&title));
+            util::download(&name, "text/calendar;charset=utf-8", &ics);
+        }
+    };
+    let google = picks
+        .iter()
+        .filter_map(|(date, note)| {
+            let event = Event {
+                date,
+                description: note.clone(),
+            };
+            let href = calendar::google_link(&title, &event)?;
+            let label = if picks.len() == 1 {
+                "Google Calendar".to_string()
+            } else {
+                format!("Google: {}", util::pretty_date(date))
+            };
+            Some(view! {
+                <a class="button-link" href=href target="_blank" rel="noopener noreferrer">
+                    {label}
+                </a>
+            })
+        })
+        .collect_view();
+    view! {
+        <div class="row calendar">
+            <button class="secondary small" on:click=download>
+                {label}
+            </button>
+            {google}
+        </div>
+    }
+    .into_any()
+}
+
 #[component]
 fn Results() -> impl IntoView {
     let conn = session().conn;
@@ -986,6 +1063,7 @@ fn Results() -> impl IntoView {
                         <span class="muted">"Best day"</span>
                         <h2>{util::pretty_date(date)}</h2>
                         <p>{format!("{available} of {} can make it", outcomes[0].ballots)}</p>
+                        <CalendarExport outcomes=outcomes.clone() />
                     </div>
                 }
                 .into_any(),
@@ -1022,6 +1100,7 @@ fn Results() -> impl IntoView {
                             })
                             .collect_view()}
                     </ol>
+                    <CalendarExport outcomes=outcomes.clone() />
                 </div>
             }
             .into_any()
