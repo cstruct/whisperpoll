@@ -309,7 +309,8 @@ impl Ceremony {
         Ok(self.sign_dealing(me, dealer, commitments, ephemeral, encrypted_shares, rng))
     }
 
-    fn verify_dealing(&self, d: &Dealing) -> bool {
+    /// Whether `d` is well-formed and signed by its dealer for this ceremony.
+    pub fn verify_dealing(&self, d: &Dealing) -> bool {
         let Some(key) = self.identity_key(d.dealer) else {
             return false;
         };

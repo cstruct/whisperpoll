@@ -280,13 +280,16 @@ fn Gathering() -> impl IntoView {
                 <button type="submit" class="secondary">"Add date"</button>
             </form>
         </div>
+        <p class="hint">
+            "Your part of the poll's key is kept in this browser. Opening your link in another browser moves it there, which is fine until voting opens. After that, this is the browser that can help reveal the result."
+        </p>
         <Show
             when=is_creator
             fallback=move || {
                 view! {
                     <div class="card muted">
                         {move || format!(
-                            "Waiting for {} to lock the dates and create the shared key.",
+                            "Waiting for {} to lock the dates and open voting.",
                             creator_name(),
                         )}
                     </div>
@@ -542,10 +545,42 @@ fn KeyCeremony() -> impl IntoView {
                         {move || if am_trustee.get() {
                             "Voting opens by itself as soon as everyone's browser has done its part."
                         } else {
-                            "You're not a trustee (you joined after the dates were locked, or from another browser). You can still vote once it's ready."
+                            "Adding this browser as a trustee…"
                         }}
                     </p>
                 </div>
+            }
+        })
+    }
+}
+
+/// Shown after voting opens if this participant's trustee key is in another
+/// browser: that browser has to be opened to help reveal the result.
+#[component]
+fn KeyElsewhere() -> impl IntoView {
+    let s = session();
+    let conn = s.conn;
+    let ids = StoredValue::new((s.id, s.token));
+    let elsewhere = Memo::new(move |_| {
+        read(conn, false, |v| {
+            let is_trustee = v
+                .ceremony
+                .as_ref()
+                .is_some_and(|c| c.trustees.contains(&v.me));
+            let mine = ids.with_value(|(id, token)| store::identity(id, token).public_bytes());
+            is_trustee
+                && v.participants[v.me]
+                    .registration
+                    .as_ref()
+                    .is_some_and(|r| r.key_bytes() != mine)
+        })
+    });
+    move || {
+        elsewhere.get().then(|| {
+            view! {
+                <p class="hint">
+                    "Your part of the poll's key is in the browser you set this poll up in. You can vote from here, but to help reveal the result, open your link in that browser."
+                </p>
             }
         })
     }
@@ -742,6 +777,7 @@ fn Voting() -> impl IntoView {
 
     view! {
         <PickedSoFar />
+        <KeyElsewhere />
         {body}
         <div class="card stack">
             {move || {
@@ -785,6 +821,7 @@ fn Tallying() -> impl IntoView {
     };
     view! {
         <PickedSoFar />
+        <KeyElsewhere />
         <div class="card stack">
             <h2>
                 {move || {

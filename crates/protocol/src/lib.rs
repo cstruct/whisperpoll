@@ -89,6 +89,8 @@ pub struct DateSuggestion {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct CeremonyView {
+    /// Bumped each time the ceremony restarts because a trustee's key changed.
+    pub attempt: u32,
     pub threshold: usize,
     /// Participant index of each trustee; trustee `j` is `trustees[j − 1]`.
     pub trustees: Vec<usize>,
@@ -145,7 +147,11 @@ pub enum ClientMsg {
         days: usize,
     },
     Deal(Dealing),
-    Checked(Vec<Complaint>),
+    /// Done checking the dealings of ceremony `attempt`, with any complaints.
+    Checked {
+        attempt: u32,
+        complaints: Vec<Complaint>,
+    },
     Vote(Ballot),
     /// Keep the ballot carried over from the previous round as is.
     KeepVote,

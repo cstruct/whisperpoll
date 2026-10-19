@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rand_core::{OsRng, RngCore};
 use whisperpoll_core::{
-    combine_tally, Ballot, BulletinBoard, Ceremony, Complaint, Dealing, PartialDecryption, Poll,
-    Receipt, Registration, TallyResult, TieredResult,
+    combine_tally, Ballot, BulletinBoard, Ceremony, Complaint, Dealing, DkgError,
+    PartialDecryption, Poll, Receipt, Registration, TallyResult, TieredResult,
 };
 use whisperpoll_protocol::{
     is_iso_date, round_winner, CeremonyView, ClientMsg, DateSuggestion, InviteLink,
@@ -52,6 +52,7 @@ impl Round {
 
 struct KeyCeremony {
     ceremony: Ceremony,
+    attempt: u32,
     threshold: usize,
     /// Participant index per trustee; trustee `j` is `trustees[j − 1]`.
     trustees: Vec<usize>,
@@ -146,6 +147,13 @@ impl Room {
         }
     }
 
+    fn registered(&self) -> usize {
+        self.members
+            .iter()
+            .filter(|m| m.registration.is_some())
+            .count()
+    }
+
     /// Trustee index (1-based) of participant `who`, if they're a trustee.
     fn trustee_index(&self, who: usize) -> Option<u32> {
         let key = self.key.as_ref()?;
@@ -164,7 +172,10 @@ impl Room {
                 self.start_ceremony(who, threshold, days)
             }
             ClientMsg::Deal(d) => self.deal(who, d),
-            ClientMsg::Checked(cs) => self.checked(who, cs),
+            ClientMsg::Checked {
+                attempt,
+                complaints,
+            } => self.checked(who, attempt, complaints),
             ClientMsg::Vote(ballot) => self.vote(who, ballot),
             ClientMsg::KeepVote => self.keep_vote(who),
             ClientMsg::CloseVoting => {
@@ -177,8 +188,14 @@ impl Room {
         }
     }
 
+    /// Registers (or replaces) a participant's trustee key. Keys are bound to
+    /// a browser, so someone switching browsers re-registers from the new one.
+    /// That's allowed until voting opens: during the key ceremony it restarts
+    /// the ceremony, which is harmless as nothing is encrypted yet.
     fn register(&mut self, who: usize, reg: Registration) -> Result<(), String> {
-        self.require_phase(Phase::Gathering)?;
+        if !matches!(self.phase, Phase::Gathering | Phase::KeyCeremony) {
+            return Err("trustee keys are fixed once voting opens".into());
+        }
         if !reg.verify(&self.id) {
             return Err("invalid trustee registration".into());
         }
@@ -192,6 +209,33 @@ impl Room {
             return Err("that trustee key is already registered".into());
         }
         self.members[who].registration = Some(reg);
+        if self.phase == Phase::KeyCeremony {
+            let k = self.key.as_ref().unwrap();
+            let (threshold, attempt) = (k.threshold, k.attempt + 1);
+            self.begin_ceremony(threshold, attempt)?;
+        }
+        Ok(())
+    }
+
+    /// Starts (or restarts) the key ceremony among everyone registered.
+    fn begin_ceremony(&mut self, threshold: usize, attempt: u32) -> Result<(), String> {
+        let (trustees, regs): (Vec<usize>, Vec<Registration>) = self
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| m.registration.clone().map(|r| (i, r)))
+            .unzip();
+        // Restarts only replace or add keys, so the creator's threshold still fits.
+        let ceremony = Ceremony::new(&self.id, threshold, &regs).map_err(|e| e.to_string())?;
+        let n = trustees.len();
+        self.key = Some(KeyCeremony {
+            ceremony,
+            attempt,
+            threshold,
+            trustees,
+            dealings: vec![None; n],
+            complaints: vec![None; n],
+        });
         Ok(())
     }
 
@@ -249,21 +293,10 @@ impl Room {
         if !(1..=self.dates.len()).contains(&days) {
             return Err(format!("you can look for 1 to {} days", self.dates.len()));
         }
-        let (trustees, regs): (Vec<usize>, Vec<Registration>) = self
-            .members
-            .iter()
-            .enumerate()
-            .filter_map(|(i, m)| m.registration.clone().map(|r| (i, r)))
-            .unzip();
-        let ceremony = Ceremony::new(&self.id, threshold, &regs).map_err(|e| e.to_string())?;
-        let n = trustees.len();
-        self.key = Some(KeyCeremony {
-            ceremony,
-            threshold,
-            trustees,
-            dealings: vec![None; n],
-            complaints: vec![None; n],
-        });
+        if !(1..=self.registered()).contains(&threshold) {
+            return Err(DkgError::InvalidThreshold.to_string());
+        }
+        self.begin_ceremony(threshold, 0)?;
         self.options = self.dates.iter().map(|d| d.date.clone()).collect();
         self.days = days;
         self.phase = Phase::KeyCeremony;
@@ -276,7 +309,12 @@ impl Room {
         if d.dealer != j {
             return Err("dealing is for another trustee".into());
         }
-        let slot = &mut self.key.as_mut().unwrap().dealings[j as usize - 1];
+        let key = self.key.as_mut().unwrap();
+        if !key.ceremony.verify_dealing(&d) {
+            // Typically dealt for a ceremony that has since restarted.
+            return Err("dealing doesn't match the current key ceremony".into());
+        }
+        let slot = &mut key.dealings[j as usize - 1];
         if slot.is_some() {
             // First dealing wins; a second one would be equivocation.
             return Err("you've already dealt".into());
@@ -285,10 +323,18 @@ impl Room {
         Ok(())
     }
 
-    fn checked(&mut self, who: usize, complaints: Vec<Complaint>) -> Result<(), String> {
+    fn checked(
+        &mut self,
+        who: usize,
+        attempt: u32,
+        complaints: Vec<Complaint>,
+    ) -> Result<(), String> {
         self.require_phase(Phase::KeyCeremony)?;
         let j = self.trustee_index(who).ok_or("you're not a trustee")?;
         let key = self.key.as_mut().unwrap();
+        if attempt != key.attempt {
+            return Err("checked an earlier key ceremony".into());
+        }
         if key.dealings.iter().any(Option::is_none) {
             return Err("not everyone has dealt yet".into());
         }
@@ -465,6 +511,7 @@ impl Room {
             },
             dates: self.dates.clone(),
             ceremony: self.key.as_ref().map(|k| CeremonyView {
+                attempt: k.attempt,
                 threshold: k.threshold,
                 trustees: k.trustees.clone(),
                 registrations: k
@@ -545,7 +592,12 @@ mod tests {
             let dealings = &v.ceremony.as_ref().unwrap().dealings;
             let c = v.ceremony().unwrap();
             let complaints = c.check_dealings(id, dealings, &mut OsRng).unwrap();
-            room.apply(who, ClientMsg::Checked(complaints)).unwrap();
+            let attempt = v.ceremony.as_ref().unwrap().attempt;
+            let checked = ClientMsg::Checked {
+                attempt,
+                complaints,
+            };
+            room.apply(who, checked).unwrap();
         }
         assert_eq!(room.view(0).phase, Phase::Voting);
         (room, ids)
@@ -668,6 +720,71 @@ mod tests {
         // No third round after a round that found nothing.
         assert_eq!((v.phase.clone(), v.rounds.len()), (Phase::Done, 2));
         assert_eq!(v.picked(), [1]);
+    }
+
+    /// bob opens his link in a chat app's browser, then switches to his real
+    /// browser after the key ceremony has started.
+    #[test]
+    fn switching_browsers_restarts_the_key_ceremony() {
+        let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
+        room.apply(0, ClientMsg::Invite { name: "bob".into() })
+            .unwrap();
+        let alice = TrusteeIdentity::generate(&mut OsRng);
+        let bob_chat_app = TrusteeIdentity::generate(&mut OsRng);
+        let bob_browser = TrusteeIdentity::generate(&mut OsRng);
+        let register = |id: &TrusteeIdentity| ClientMsg::Register(id.register("p1", &mut OsRng));
+        room.apply(0, register(&alice)).unwrap();
+        room.apply(1, register(&bob_chat_app)).unwrap();
+        let date = ClientMsg::SuggestDate {
+            date: "2026-10-24".into(),
+        };
+        room.apply(1, date).unwrap();
+        let start = ClientMsg::StartCeremony {
+            threshold: 2,
+            days: 1,
+        };
+        room.apply(0, start).unwrap();
+
+        // alice deals right away; bob's chat-app browser is already closed.
+        let c = room.view(0).ceremony().unwrap();
+        let stale = c.deal(&alice, &mut OsRng).unwrap();
+        room.apply(0, ClientMsg::Deal(stale.clone())).unwrap();
+
+        // bob's real browser registers its own key: the ceremony restarts.
+        room.apply(1, register(&bob_browser)).unwrap();
+        let v = room.view(0);
+        let cv = v.ceremony.as_ref().unwrap();
+        assert_eq!((cv.attempt, cv.dealings.len()), (1, 0));
+        let c = v.ceremony().unwrap();
+        assert_eq!(c.index_of(&bob_browser), Some(2));
+        assert_eq!(c.index_of(&bob_chat_app), None);
+
+        // Leftovers from the first attempt are refused.
+        assert!(room.apply(0, ClientMsg::Deal(stale)).is_err());
+        let stale_check = ClientMsg::Checked {
+            attempt: 0,
+            complaints: vec![],
+        };
+        assert!(room.apply(0, stale_check).is_err());
+
+        // Both deal and check for the new attempt, and voting opens.
+        for (who, id) in [(0, &alice), (1, &bob_browser)] {
+            let dealing = c.deal(id, &mut OsRng).unwrap();
+            room.apply(who, ClientMsg::Deal(dealing)).unwrap();
+        }
+        let dealings = room.view(0).ceremony.unwrap().dealings;
+        for (who, id) in [(0, &alice), (1, &bob_browser)] {
+            let complaints = c.check_dealings(id, &dealings, &mut OsRng).unwrap();
+            let checked = ClientMsg::Checked {
+                attempt: 1,
+                complaints,
+            };
+            room.apply(who, checked).unwrap();
+        }
+        assert_eq!(room.view(0).phase, Phase::Voting);
+
+        // Once voting is open, keys are fixed.
+        assert!(room.apply(1, register(&bob_chat_app)).is_err());
     }
 
     #[test]
