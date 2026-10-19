@@ -15,8 +15,8 @@
 use curve25519_dalek::scalar::Scalar;
 use rand_core::CryptoRngCore;
 
-use crate::elgamal::Ciphertext;
-use crate::poll::{Ballot, BallotKind, Error, Poll, TallyResult};
+use crate::elgamal::{Ciphertext, PublicKey};
+use crate::poll::{sum_cells, Ballot, BallotKind, Error, Poll, SumProof, TallyResult};
 use crate::proofs::ValueProof;
 
 /// Encrypts `ranking` (option indices, most preferred first; every option exactly once).
@@ -51,29 +51,29 @@ pub fn cast_ranked_ballot(
     let mut sum_proofs = Vec::with_capacity(2 * n);
     for option in 0..n {
         let cells = row(n, option);
-        let ct = sum_ciphertexts(&choices, &cells);
+        let ct = sum_cells(&choices, cells.iter().copied());
         let r: Scalar = cells.iter().map(|&i| randomness[i]).sum();
-        sum_proofs.push(ValueProof::prove(
+        sum_proofs.push(SumProof::One(ValueProof::prove(
             pk,
             &ct,
             1,
             &r,
             &poll.context(b"row", option),
             rng,
-        ));
+        )));
     }
     for rank in 0..n {
         let cells = column(n, rank);
-        let ct = sum_ciphertexts(&choices, &cells);
+        let ct = sum_cells(&choices, cells.iter().copied());
         let r: Scalar = cells.iter().map(|&i| randomness[i]).sum();
-        sum_proofs.push(ValueProof::prove(
+        sum_proofs.push(SumProof::One(ValueProof::prove(
             pk,
             &ct,
             1,
             &r,
             &poll.context(b"col", rank),
             rng,
-        ));
+        )));
     }
     Ok(Ballot {
         choices,
@@ -90,14 +90,14 @@ pub(crate) fn verify_permutation(poll: &Poll, ballot: &Ballot) -> Result<(), Err
     let pk = &poll.public_key;
     let (row_proofs, col_proofs) = ballot.sum_proofs.split_at(n);
     for (option, proof) in row_proofs.iter().enumerate() {
-        let ct = sum_ciphertexts(&ballot.choices, &row(n, option));
-        if !proof.verify(pk, &ct, 1, &poll.context(b"row", option)) {
+        let ct = sum_cells(&ballot.choices, row(n, option));
+        if !proves_one(proof, pk, &ct, &poll.context(b"row", option)) {
             return Err(Error::InvalidRowProof { option });
         }
     }
     for (rank, proof) in col_proofs.iter().enumerate() {
-        let ct = sum_ciphertexts(&ballot.choices, &column(n, rank));
-        if !proof.verify(pk, &ct, 1, &poll.context(b"col", rank)) {
+        let ct = sum_cells(&ballot.choices, column(n, rank));
+        if !proves_one(proof, pk, &ct, &poll.context(b"col", rank)) {
             return Err(Error::InvalidColumnProof { rank });
         }
     }
@@ -112,8 +112,8 @@ fn column(n: usize, rank: usize) -> Vec<usize> {
     (0..n).map(|option| option * n + rank).collect()
 }
 
-fn sum_ciphertexts(choices: &[crate::poll::EncryptedChoice], cells: &[usize]) -> Ciphertext {
-    cells.iter().map(|&i| choices[i].ciphertext).sum()
+fn proves_one(proof: &SumProof, pk: &PublicKey, ct: &Ciphertext, ctx: &[u8]) -> bool {
+    matches!(proof, SumProof::One(p) if p.verify(pk, ct, 1, ctx))
 }
 
 /// Plaintext results of a ranked poll, derived from a verified [`TallyResult`].

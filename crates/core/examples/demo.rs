@@ -11,6 +11,8 @@ fn main() {
     approval_poll();
     println!("\n────────────────────────────\n");
     ranked_poll();
+    println!("\n────────────────────────────\n");
+    tiered_poll();
 }
 
 fn approval_poll() {
@@ -104,6 +106,56 @@ fn ranked_poll() {
         println!(
             "{:<12} {:>3} {:>3} {:>3}  {:>5}",
             board.poll.options[o], p[0], p[1], p[2], result.borda[o]
+        );
+    }
+}
+
+fn tiered_poll() {
+    const TIERS: [&str; 3] = ["Prefer", "OK", "If needed"];
+    let (prefer, ok, if_needed, cant) = (Some(0), Some(1), Some(2), None);
+
+    let sk = SecretKey::generate(&mut OsRng);
+    let days = ["Fri 24 Oct", "Sat 25 Oct", "Sun 26 Oct"]
+        .map(String::from)
+        .to_vec();
+    let kind = BallotKind::Tiered { tiers: TIERS.len() };
+    let mut board =
+        BulletinBoard::new(Poll::new("team-dinner-tiered", days, kind, sk.public_key()));
+
+    let voters = [
+        ("alice", [ok, prefer, cant]),
+        ("bob", [cant, prefer, prefer]),
+        ("carol", [prefer, if_needed, prefer]),
+        ("dave", [cant, cant, ok]),
+    ];
+    for (name, choices) in voters {
+        let ballot = cast_tiered_ballot(&board.poll, &choices, &mut OsRng).unwrap();
+        let receipt = board.submit(ballot).unwrap();
+        println!(
+            "{name:>6} cast a tiered ballot, receipt {}",
+            &hex(&receipt.0)[..16]
+        );
+    }
+
+    let tally = decrypt_tally(&sk, &board, &mut OsRng);
+    match verify_tally(&board, &tally) {
+        Ok(()) => println!(
+            "tally verified against all {} ballots\n",
+            board.ballots().len()
+        ),
+        Err(e) => println!("tally verification FAILED: {e}\n"),
+    }
+
+    let result = TieredResult::from_tally(&board.poll, &tally).unwrap();
+    println!(
+        "{:<12} {:>6} {:>3} {:>9}  can come  score",
+        "", TIERS[0], TIERS[1], TIERS[2]
+    );
+    for o in result.order() {
+        let c = &result.counts[o];
+        println!(
+            "{:<12} {:>6} {:>3} {:>9}  {:>8}  {:>5}",
+            board.poll.options[o], c[0], c[1], c[2], result.available[o], result.score[o]
         );
     }
 }

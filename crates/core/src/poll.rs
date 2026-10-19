@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::elgamal::{discrete_log, Ciphertext, PublicKey, SecretKey};
 use crate::proofs::{BitProof, DecryptionProof, ValueProof};
-use crate::ranked;
+use crate::{ranked, tiered};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BallotKind {
@@ -17,6 +17,22 @@ pub enum BallotKind {
     Approval,
     /// Rank every day: an encrypted n×n permutation matrix (see [`crate::cast_ranked_ballot`]).
     Ranked,
+    /// Put each day in one of `tiers` preference levels, or leave it out as
+    /// "can't make it". Ties and partial ballots allowed (see [`crate::cast_tiered_ballot`]).
+    Tiered { tiers: usize },
+}
+
+impl BallotKind {
+    fn tag(&self) -> [u8; 9] {
+        let (tag, param) = match self {
+            BallotKind::Approval => (0, 0),
+            BallotKind::Ranked => (1, 0),
+            BallotKind::Tiered { tiers } => (2, *tiers as u64),
+        };
+        let mut out = [tag; 9];
+        out[1..].copy_from_slice(&param.to_le_bytes());
+        out
+    }
 }
 
 /// A poll's public parameters. `options` are the candidate days.
@@ -34,12 +50,21 @@ pub struct EncryptedChoice {
     pub proof: BitProof,
 }
 
-/// One participant's ballot: encrypted 0/1 cells, each proven to be a bit.
-/// Ranked ballots also prove that every row and column of the matrix sums to 1.
+/// A proof about the homomorphic sum of some of a ballot's cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SumProof {
+    /// The cells sum to exactly 1 (ranked rows and columns).
+    One(ValueProof),
+    /// The cells sum to 0 or 1 (tiered rows: at most one tier per day).
+    ZeroOrOne(BitProof),
+}
+
+/// One participant's ballot: encrypted 0/1 cells, each proven to be a bit,
+/// plus kind-specific proofs about row/column sums (none for approval).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ballot {
     pub choices: Vec<EncryptedChoice>,
-    pub sum_proofs: Vec<ValueProof>,
+    pub sum_proofs: Vec<SumProof>,
 }
 
 /// What a voter keeps to later find their ballot on the board. Reveals nothing about the vote.
@@ -47,7 +72,8 @@ pub struct Ballot {
 pub struct Receipt(pub [u8; 32]);
 
 /// Decrypted per-cell totals: per option for approval polls, per
-/// (option, rank) for ranked polls (see [`crate::RankedResult`]).
+/// (option, rank) for ranked polls (see [`crate::RankedResult`]), per
+/// (option, tier) for tiered polls (see [`crate::TieredResult`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TallyResult {
     pub counts: Vec<u64>,
@@ -60,6 +86,8 @@ pub enum Error {
     WrongOptionCount { expected: usize, got: usize },
     WrongChoiceCount { expected: usize, got: usize },
     InvalidRanking,
+    NoTiers,
+    InvalidTier { option: usize },
     InvalidBallotProof { cell: usize },
     WrongSumProofCount,
     InvalidRowProof { option: usize },
@@ -81,12 +109,16 @@ impl fmt::Display for Error {
                 write!(f, "ballot has {got} encrypted cells, expected {expected}")
             }
             Error::InvalidRanking => write!(f, "ranking must list every option exactly once"),
+            Error::NoTiers => write!(f, "a tiered poll needs at least one tier"),
+            Error::InvalidTier { option } => {
+                write!(f, "option {option} is given a tier that doesn't exist")
+            }
             Error::InvalidBallotProof { cell } => {
                 write!(f, "cell {cell} is not a proven encryption of 0 or 1")
             }
             Error::WrongSumProofCount => write!(f, "ballot has the wrong number of sum proofs"),
             Error::InvalidRowProof { option } => {
-                write!(f, "option {option} is not given exactly one rank")
+                write!(f, "option {option} is not given a valid rank or tier")
             }
             Error::InvalidColumnProof { rank } => {
                 write!(f, "rank {rank} is not given to exactly one option")
@@ -126,6 +158,7 @@ impl Poll {
         match self.kind {
             BallotKind::Approval => n,
             BallotKind::Ranked => n * n,
+            BallotKind::Tiered { tiers } => n * tiers,
         }
     }
 
@@ -136,7 +169,7 @@ impl Poll {
         let mut h = Sha256::new();
         h.update((self.id.len() as u64).to_le_bytes());
         h.update(self.id.as_bytes());
-        h.update([self.kind as u8]);
+        h.update(self.kind.tag());
         h.update((self.options.len() as u64).to_le_bytes());
         for o in &self.options {
             h.update((o.len() as u64).to_le_bytes());
@@ -169,6 +202,7 @@ impl Poll {
             BallotKind::Approval if ballot.sum_proofs.is_empty() => Ok(()),
             BallotKind::Approval => Err(Error::WrongSumProofCount),
             BallotKind::Ranked => ranked::verify_permutation(self, ballot),
+            BallotKind::Tiered { tiers } => tiered::verify_rows(self, tiers, ballot),
         }
     }
 
@@ -190,6 +224,14 @@ impl Poll {
         );
         (EncryptedChoice { ciphertext, proof }, r)
     }
+}
+
+/// Homomorphic sum of the given cells of a ballot.
+pub(crate) fn sum_cells(
+    choices: &[EncryptedChoice],
+    cells: impl IntoIterator<Item = usize>,
+) -> Ciphertext {
+    cells.into_iter().map(|i| choices[i].ciphertext).sum()
 }
 
 impl Ballot {
