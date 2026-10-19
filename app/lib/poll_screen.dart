@@ -13,12 +13,28 @@ import 'model.dart';
 import 'src/rust/api/poll.dart' as rust;
 import 'storage.dart';
 
-String prettyDate(String iso) {
-  final date = DateTime.tryParse(iso);
-  return date == null ? iso : DateFormat('EEE d MMM').format(date);
+/// A slot (`2026-10-30T18:00+02:00/120`) in this phone's time zone:
+/// `Fri 30 Oct, 18:00–20:00`.
+String prettySlot(String slot) {
+  final times = rust.slotTimes(slot: slot);
+  if (times == null) return slot;
+  final start = DateTime.fromMillisecondsSinceEpoch(times.startMillis);
+  final end = start.add(Duration(minutes: times.minutes));
+  final hm = DateFormat('HH:mm');
+  return '${DateFormat('EEE d MMM').format(start)}, ${hm.format(start)}–${hm.format(end)}';
 }
 
-/// One poll, mirroring the web page: invite & dates, vote, result.
+/// `90` → `1 h 30 min`.
+String prettyDuration(int minutes) => switch ((minutes ~/ 60, minutes % 60)) {
+      (0, final m) => '$m min',
+      (final h, 0) => '$h h',
+      (final h, final m) => '$h h $m min',
+    };
+
+/// Durations offered when suggesting a slot, in minutes.
+const durations = [30, 60, 90, 120, 150, 180, 240, 300, 360, 480];
+
+/// One poll, mirroring the web page: invite & times, vote, result.
 class PollScreen extends StatefulWidget {
   const PollScreen({super.key, required this.invite});
 
@@ -148,7 +164,7 @@ class _PollScreenState extends State<PollScreen> {
         ),
         if (s.view.isCreator) ...[_Invites(s), _Start(s)] else
           _Card(child: Text(
-            'Waiting for ${s.view.participants.firstWhere((p) => p.creator).name} to lock the dates '
+            'Waiting for ${s.view.participants.firstWhere((p) => p.creator).name} to lock the times '
             'and open voting.',
           )),
       ];
@@ -255,7 +271,7 @@ class _Steps extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Row(
       children: [
-        for (final (i, label) in ['Invite & dates', 'Vote', 'Result'].indexed)
+        for (final (i, label) in ['Invite & times', 'Vote', 'Result'].indexed)
           Expanded(
             child: Container(
               padding: const EdgeInsets.only(bottom: 8),
@@ -282,46 +298,139 @@ class _Steps extends StatelessWidget {
   }
 }
 
-class _Dates extends StatelessWidget {
+/// Suggesting a slot: a date, a start time and a duration. The time and
+/// duration stay after adding (and are remembered for next time), so several
+/// days only need their dates.
+class _Dates extends StatefulWidget {
   const _Dates(this.s);
   final _Ctx s;
 
-  Future<void> _add(BuildContext context) async {
+  @override
+  State<_Dates> createState() => _DatesState();
+}
+
+class _DatesState extends State<_Dates> {
+  static final _compact = OutlinedButton.styleFrom(
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    visualDensity: VisualDensity.compact,
+  );
+
+  DateTime? _date;
+  TimeOfDay _time = const TimeOfDay(hour: 18, minute: 0);
+  int _minutes = 120;
+
+  @override
+  void initState() {
+    super.initState();
+    SlotDefaults.load().then((d) {
+      if (!mounted) return;
+      setState(() {
+        _time = d.$1;
+        _minutes = d.$2;
+      });
+    });
+  }
+
+  Future<void> _pickDate() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      firstDate: now,
+      initialDate: _date ?? now,
+      firstDate: DateTime(now.year, now.month, now.day),
       lastDate: now.add(const Duration(days: 730)),
     );
-    if (picked == null) return;
-    s.conn.send({
-      'SuggestDate': {'date': DateFormat('yyyy-MM-dd').format(picked)}
+    if (picked != null) setState(() => _date = picked);
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(context: context, initialTime: _time);
+    if (picked != null) setState(() => _time = picked);
+  }
+
+  void _add() {
+    final date = _date;
+    if (date == null) return;
+    final local = DateTime(date.year, date.month, date.day, _time.hour, _time.minute);
+    final slot = rust.makeSlot(
+      date: DateFormat('yyyy-MM-dd').format(local),
+      time: DateFormat('HH:mm').format(local),
+      offsetMinutes: local.timeZoneOffset.inMinutes,
+      minutes: _minutes,
+    );
+    if (slot == null) return;
+    widget.s.conn.send({
+      'SuggestSlot': {'slot': slot}
     });
+    SlotDefaults.save(_time, _minutes);
+    setState(() => _date = null);
   }
 
   @override
   Widget build(BuildContext context) {
-    final dates = s.view.dates;
+    final slots = widget.s.view.slots;
+    final date = _date;
     return _Card(
-      title: 'Suggest dates',
+      title: 'Suggest times',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Anyone can add a day. The list is locked when voting opens.'),
+          const Text('Anyone can add a time. The list is locked when voting opens.'),
           const SizedBox(height: 8),
-          if (dates.isEmpty) const Text('No dates yet.'),
-          for (final (date, by) in dates)
+          if (slots.isEmpty) const Text('No times yet.'),
+          for (final (slot, by) in slots)
             ListTile(
               contentPadding: EdgeInsets.zero,
               dense: true,
-              title: Text(prettyDate(date), style: const TextStyle(fontWeight: FontWeight.w600)),
+              title: Text(prettySlot(slot), style: const TextStyle(fontWeight: FontWeight.w600)),
               trailing: Text('by $by'),
             ),
           const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: () => _add(context),
+          // Date, start time and duration on one row.
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  style: _compact,
+                  onPressed: _pickDate,
+                  icon: const Icon(Icons.calendar_today, size: 16),
+                  label: Text(
+                    date == null ? 'Date' : DateFormat('EEE d MMM').format(date),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              OutlinedButton.icon(
+                style: _compact,
+                onPressed: _pickTime,
+                icon: const Icon(Icons.schedule, size: 16),
+                label: Text(_time.format(context)),
+              ),
+              const SizedBox(width: 6),
+              PopupMenuButton<int>(
+                tooltip: 'Duration',
+                initialValue: _minutes,
+                onSelected: (m) => setState(() => _minutes = m),
+                itemBuilder: (_) => [
+                  for (final m in durations) PopupMenuItem(value: m, child: Text(prettyDuration(m))),
+                ],
+                // Looks like the other two; the menu button handles the tap.
+                child: IgnorePointer(
+                  child: OutlinedButton.icon(
+                    style: _compact,
+                    onPressed: () {},
+                    icon: const Icon(Icons.timelapse, size: 16),
+                    label: Text(prettyDuration(_minutes)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          FilledButton.tonalIcon(
+            onPressed: date == null ? null : _add,
             icon: const Icon(Icons.add),
-            label: const Text('Add date'),
+            label: const Text('Add time'),
           ),
         ],
       ),
@@ -380,7 +489,7 @@ class _InvitesState extends State<_Invites> {
                 onPressed: () {
                   final url = Invite(server: s.invite.server, poll: s.view.id, token: token).webUrl;
                   SharePlus.instance.share(ShareParams(
-                    text: 'Help pick a day for ${s.view.title}: $url',
+                    text: 'Help pick a time for ${s.view.title}: $url',
                     subject: s.view.title,
                   ));
                 },
@@ -409,7 +518,7 @@ class _StartState extends State<_Start> {
     final view = widget.s.view;
     final n = view.participants.where((p) => p.registered).length;
     final t = (_threshold != null && _threshold! >= 1 && _threshold! <= n) ? _threshold! : n ~/ 2 + 1;
-    final dates = view.dates.length;
+    final dates = view.slots.length;
     final days = _days.clamp(1, dates < 1 ? 1 : dates);
     final hint = n <= 1
         ? "Only you have joined so far, so you'd hold the whole key. Wait for others to open their links."
@@ -418,14 +527,14 @@ class _StartState extends State<_Start> {
             : 'Any $t of $n can reveal the result, so it survives ${n - t} no-show${n - t == 1 ? '' : 's'}. '
                 'But $t working together could also read individual ballots.';
     return _Card(
-      title: 'Lock dates & open voting',
+      title: 'Lock times & open voting',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
             'Everyone who has opened their link ($n so far) becomes a trustee: their phones and '
             "browsers create the poll's key together, so no single person can unlock a ballot. That "
-            'needs their app or page open for a moment after you lock the dates.',
+            'needs their app or page open for a moment after you lock the times.',
           ),
           const SizedBox(height: 12),
           Row(children: [
@@ -441,12 +550,12 @@ class _StartState extends State<_Start> {
           ]),
           _Hint(hint),
           Row(children: [
-            const Expanded(child: Text('Days to find')),
+            const Expanded(child: Text('Meetings to pick')),
             DropdownButton<int>(
               value: days,
               items: [
                 for (var d = 1; d <= (dates < 1 ? 1 : dates); d++)
-                  DropdownMenuItem(value: d, child: Text(d == 1 ? '1 day' : '$d days')),
+                  DropdownMenuItem(value: d, child: Text(d == 1 ? '1 meeting' : '$d meetings')),
               ],
               onChanged: (v) => setState(() => _days = v ?? 1),
             ),
@@ -458,7 +567,7 @@ class _StartState extends State<_Start> {
                 : () => widget.s.conn.send({
                       'StartCeremony': {'threshold': t, 'days': days}
                     }),
-            child: const Text('Lock dates & open voting'),
+            child: const Text('Lock times & open voting'),
           ),
         ],
       ),
@@ -559,7 +668,7 @@ class _VotingState extends State<_Voting> {
     final receipts = await Keys.receipts(widget.s.invite, _round);
     if (!mounted) return;
     setState(() {
-      // Later rounds start from your last vote; picked days can't win again.
+      // Later rounds start from your last vote; picked times can't win again.
       if (_round > 1 && remembered != null && remembered.length == view.options.length) {
         _choices = [for (final (i, c) in remembered.indexed) view.picked.contains(i) ? null : c];
       }
@@ -593,13 +702,13 @@ class _VotingState extends State<_Voting> {
     final mine = view.mine;
     final voters = view.participants;
     final ready = voters.where((p) => p.voted).length;
-    final taken = [for (final o in view.picked) prettyDate(view.options[o])].join(', ');
+    final taken = [for (final o in view.picked) prettySlot(view.options[o])].join(', ');
     final Widget body;
     if (_editing || (!mine.hasBallot && !mine.voted)) {
       body = _ballot(view);
     } else if (mine.voted) {
       body = _Card(
-        title: view.days > 1 ? "You're set for day $_round" : 'Your vote is in',
+        title: view.days > 1 ? "You're set for meeting $_round" : 'Your vote is in',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -615,7 +724,7 @@ class _VotingState extends State<_Voting> {
       );
     } else {
       body = _Card(
-        title: 'Day $_round of ${view.days}',
+        title: 'Meeting $_round of ${view.days}',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -663,8 +772,8 @@ class _VotingState extends State<_Voting> {
   Widget _ballot(PollView view) {
     return _Card(
       title: view.days > 1
-          ? 'Day $_round of ${view.days}: how well does each day work for you?'
-          : 'How well does each day work for you?',
+          ? 'Meeting $_round of ${view.days}: how well does each time work for you?'
+          : 'How well does each time work for you?',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -678,10 +787,10 @@ class _VotingState extends State<_Voting> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(prettyDate(date), style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(prettySlot(date), style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 6),
                   if (view.picked.contains(i))
-                    Text('Picked for day ${view.picked.indexOf(i) + 1}')
+                    Text('Picked for meeting ${view.picked.indexOf(i) + 1}')
                   else
                     SegmentedButton<int>(
                       showSelectedIcon: false,
@@ -725,7 +834,7 @@ class _Tallying extends StatelessWidget {
     final done = view.rounds.last.decryptedBy.length;
     final needed = view.ceremony?.threshold ?? 0;
     return _Card(
-      title: view.days > 1 ? 'Revealing day ${view.rounds.length} of ${view.days}' : 'Revealing the result',
+      title: view.days > 1 ? 'Revealing meeting ${view.rounds.length} of ${view.days}' : 'Revealing the result',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -753,7 +862,7 @@ class _ResultSummary extends StatefulWidget {
 }
 
 class _ResultSummaryState extends State<_ResultSummary> {
-  /// Picked dates already added to this phone's calendar.
+  /// Picked slots already added to this phone's calendar.
   List<String> _added = [];
   bool _busy = false;
 
@@ -765,7 +874,7 @@ class _ResultSummaryState extends State<_ResultSummary> {
     });
   }
 
-  List<rust.OutcomeOut> get _picked => [for (final o in widget.outcomes) if (o.winnerDate != null) o];
+  List<rust.OutcomeOut> get _picked => [for (final o in widget.outcomes) if (o.winnerSlot != null) o];
 
   String _note(rust.OutcomeOut o) =>
       '${o.winnerAvailable} of ${o.ballots} can make it. Picked with whisperpoll.';
@@ -777,12 +886,12 @@ class _ResultSummaryState extends State<_ResultSummary> {
     try {
       final count = await DeviceCalendar.add(widget.s.invite, [
         for (final o in picked)
-          DayEvent(date: o.winnerDate!, title: widget.s.view.title, notes: _note(o)),
+          SlotEvent(slot: o.winnerSlot!, title: widget.s.view.title, notes: _note(o)),
       ]);
-      setState(() => _added = [for (final o in picked) o.winnerDate!]);
+      setState(() => _added = [for (final o in picked) o.winnerSlot!]);
       messenger.showSnackBar(SnackBar(
-        content: Text(count == 1 ? 'Added to your calendar.' : 'Added $count days to your calendar.'),
-        action: SnackBarAction(label: 'Open', onPressed: () => DeviceCalendar.open(picked.first.winnerDate!)),
+        content: Text(count == 1 ? 'Added to your calendar.' : 'Added $count meetings to your calendar.'),
+        action: SnackBarAction(label: 'Open', onPressed: () => DeviceCalendar.open(picked.first.winnerSlot!)),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(SnackBar(
@@ -795,7 +904,7 @@ class _ResultSummaryState extends State<_ResultSummary> {
     }
   }
 
-  /// The same days as an .ics file, for other calendars or other people.
+  /// The same times as an .ics file, for other calendars or other people.
   Future<void> _shareIcs() async {
     final view = widget.s.view;
     final picked = _picked;
@@ -804,7 +913,7 @@ class _ResultSummaryState extends State<_ResultSummary> {
       title: view.title,
       pollId: view.id,
       stamp: stamp,
-      dates: [for (final o in picked) o.winnerDate!],
+      slots: [for (final o in picked) o.winnerSlot!],
       notes: [for (final o in picked) _note(o)],
     );
     final dir = await getTemporaryDirectory();
@@ -824,7 +933,7 @@ class _ResultSummaryState extends State<_ResultSummary> {
     final theme = Theme.of(context);
     final picked = _picked;
     final days = widget.s.view.days;
-    final inCalendar = picked.isNotEmpty && picked.every((o) => _added.contains(o.winnerDate));
+    final inCalendar = picked.isNotEmpty && picked.every((o) => _added.contains(o.winnerSlot));
     return Card(
       color: theme.colorScheme.primaryContainer,
       margin: const EdgeInsets.only(bottom: 12),
@@ -834,18 +943,18 @@ class _ResultSummaryState extends State<_ResultSummary> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (days == 1 && picked.isNotEmpty) ...[
-              const Text('Best day'),
-              Text(prettyDate(picked.first.winnerDate!), style: theme.textTheme.headlineSmall),
+              const Text('Best time'),
+              Text(prettySlot(picked.first.winnerSlot!), style: theme.textTheme.headlineSmall),
               Text('${picked.first.winnerAvailable} of ${picked.first.ballots} can make it'),
             ] else if (picked.isEmpty) ...[
-              Text('No date works', style: theme.textTheme.headlineSmall),
-              const Text('Nobody can make any of the suggested days.'),
+              Text('No time works', style: theme.textTheme.headlineSmall),
+              const Text('Nobody can make any of the suggested times.'),
             ] else ...[
-              Text('Found ${picked.length} of $days days'),
+              Text('Found ${picked.length} of $days meetings'),
               for (final (i, o) in outcomes.indexed)
-                Text(o.winnerDate == null
-                    ? '${i + 1}. No remaining day works for anyone, so the search stopped here.'
-                    : '${i + 1}. ${prettyDate(o.winnerDate!)} — ${o.winnerAvailable} of ${o.ballots} can make it'),
+                Text(o.winnerSlot == null
+                    ? '${i + 1}. No remaining time works for anyone, so the search stopped here.'
+                    : '${i + 1}. ${prettySlot(o.winnerSlot!)} — ${o.winnerAvailable} of ${o.ballots} can make it'),
             ],
             if (picked.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -856,7 +965,7 @@ class _ResultSummaryState extends State<_ResultSummary> {
                 children: [
                   if (inCalendar)
                     FilledButton.tonalIcon(
-                      onPressed: () => DeviceCalendar.open(picked.first.winnerDate!),
+                      onPressed: () => DeviceCalendar.open(picked.first.winnerSlot!),
                       icon: const Icon(Icons.event_available),
                       label: const Text('In your calendar'),
                     )
@@ -892,11 +1001,11 @@ class _RoundDetails extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final checksOut = o.verificationError == null && o.winnerChecksOut;
-    final title = o.winnerDate == null
-        ? 'Day $round: no date found'
+    final title = o.winnerSlot == null
+        ? 'Meeting $round: no time found'
         : s.view.days == 1
-            ? 'Result: ${prettyDate(o.winnerDate!)}'
-            : 'Day $round: ${prettyDate(o.winnerDate!)}';
+            ? 'Result: ${prettySlot(o.winnerSlot!)}'
+            : 'Meeting $round: ${prettySlot(o.winnerSlot!)}';
     final ok = TextStyle(color: Colors.green.shade600);
     final bad = TextStyle(color: theme.colorScheme.error);
     return Card(
@@ -922,7 +1031,7 @@ class _RoundDetails extends StatelessWidget {
                 for (final row in o.rows)
                   DataRow(cells: [
                     DataCell(Text(
-                      prettyDate(row.date) + (row.pickedEarlier ? ' (picked)' : ''),
+                      prettySlot(row.slot) + (row.pickedEarlier ? ' (picked)' : ''),
                       style: row.pickedEarlier ? TextStyle(color: theme.disabledColor) : null,
                     )),
                     for (final c in row.counts) DataCell(Text('$c')),
@@ -932,7 +1041,7 @@ class _RoundDetails extends StatelessWidget {
               ],
             ),
           ),
-          const _Hint('Days are ranked by how many can come, then by preference (3 / 2 / 1 points).'),
+          const _Hint('Times are ranked by how many can come, then by preference (3 / 2 / 1 points).'),
           if (o.verificationError == null)
             Text(
               '✓ Checked on this phone: all ${o.ballots} ballots are valid, and the totals are exactly '

@@ -39,6 +39,21 @@ pub fn identity(poll: &str, token: &str) -> TrusteeIdentity {
     id
 }
 
+/// The start time and duration last used when suggesting a slot, so the
+/// next suggestion only needs a date.
+pub fn slot_defaults() -> (String, u32) {
+    get("whisperpoll:slot-defaults")
+        .and_then(|v| {
+            let (time, minutes) = v.split_once('/')?;
+            Some((time.to_string(), minutes.parse().ok()?))
+        })
+        .unwrap_or_else(|| ("18:00".into(), 120))
+}
+
+pub fn save_slot_defaults(time: &str, minutes: u32) {
+    set("whisperpoll:slot-defaults", &format!("{time}/{minutes}"));
+}
+
 pub fn save_receipt(poll: &str, token: &str, round: usize, receipt: &Receipt) {
     set(
         &key(poll, token, &format!("receipt:{round}")),

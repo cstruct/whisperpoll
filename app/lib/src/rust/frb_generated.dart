@@ -69,7 +69,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -1442453425;
+  int get rustContentHash => 2026159728;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -85,7 +85,7 @@ abstract class RustLibApi extends BaseApi {
     required String title,
     required String pollId,
     required String stamp,
-    required List<String> dates,
+    required List<String> slots,
     required List<String> notes,
   });
 
@@ -97,6 +97,13 @@ abstract class RustLibApi extends BaseApi {
   String crateApiPollIdentityPublic({required String identityHex});
 
   Future<void> crateApiPollInitApp();
+
+  String? crateApiPollMakeSlot({
+    required String date,
+    required String time,
+    required int offsetMinutes,
+    required int minutes,
+  });
 
   String crateApiPollNewIdentity();
 
@@ -110,6 +117,8 @@ abstract class RustLibApi extends BaseApi {
     required String viewJson,
     required List<String?> receipts,
   });
+
+  SlotTimes? crateApiPollSlotTimes({required String slot});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -125,7 +134,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String title,
     required String pollId,
     required String stamp,
-    required List<String> dates,
+    required List<String> slots,
     required List<String> notes,
   }) {
     return handler.executeSync(
@@ -135,7 +144,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(title, serializer);
           sse_encode_String(pollId, serializer);
           sse_encode_String(stamp, serializer);
-          sse_encode_list_String(dates, serializer);
+          sse_encode_list_String(slots, serializer);
           sse_encode_list_String(notes, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
         },
@@ -144,7 +153,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiPollCalendarIcsConstMeta,
-        argValues: [title, pollId, stamp, dates, notes],
+        argValues: [title, pollId, stamp, slots, notes],
         apiImpl: this,
       ),
     );
@@ -152,7 +161,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiPollCalendarIcsConstMeta => const TaskConstMeta(
     debugName: "calendar_ics",
-    argNames: ["title", "pollId", "stamp", "dates", "notes"],
+    argNames: ["title", "pollId", "stamp", "slots", "notes"],
   );
 
   @override
@@ -242,12 +251,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  String? crateApiPollMakeSlot({
+    required String date,
+    required String time,
+    required int offsetMinutes,
+    required int minutes,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(date, serializer);
+          sse_encode_String(time, serializer);
+          sse_encode_i_32(offsetMinutes, serializer);
+          sse_encode_u_32(minutes, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiPollMakeSlotConstMeta,
+        argValues: [date, time, offsetMinutes, minutes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPollMakeSlotConstMeta => const TaskConstMeta(
+    debugName: "make_slot",
+    argNames: ["date", "time", "offsetMinutes", "minutes"],
+  );
+
+  @override
   String crateApiPollNewIdentity() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -279,7 +321,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 7,
             port: port_,
           );
         },
@@ -313,7 +355,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 8,
             port: port_,
           );
         },
@@ -332,6 +374,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     debugName: "outcomes",
     argNames: ["viewJson", "receipts"],
   );
+
+  @override
+  SlotTimes? crateApiPollSlotTimes({required String slot}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(slot, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_slot_times,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiPollSlotTimesConstMeta,
+        argValues: [slot],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPollSlotTimesConstMeta =>
+      const TaskConstMeta(debugName: "slot_times", argNames: ["slot"]);
 
   @protected
   String dco_decode_String(dynamic raw) {
@@ -364,6 +429,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SlotTimes dco_decode_box_autoadd_slot_times(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_slot_times(raw);
+  }
+
+  @protected
   StepOut dco_decode_box_autoadd_step_out(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_step_out(raw);
@@ -373,6 +444,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int dco_decode_box_autoadd_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
+  }
+
+  @protected
+  int dco_decode_i_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeI64(raw);
   }
 
   @protected
@@ -430,6 +513,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SlotTimes? dco_decode_opt_box_autoadd_slot_times(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_slot_times(raw);
+  }
+
+  @protected
   StepOut? dco_decode_opt_box_autoadd_step_out(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_step_out(raw);
@@ -450,7 +539,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return OutcomeOut(
       rows: dco_decode_list_row_out(arr[0]),
       ballots: dco_decode_u_32(arr[1]),
-      winnerDate: dco_decode_opt_String(arr[2]),
+      winnerSlot: dco_decode_opt_String(arr[2]),
       winnerAvailable: dco_decode_u_32(arr[3]),
       verificationError: dco_decode_opt_String(arr[4]),
       winnerChecksOut: dco_decode_bool(arr[5]),
@@ -466,11 +555,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (arr.length != 5)
       throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return RowOut(
-      date: dco_decode_String(arr[0]),
+      slot: dco_decode_String(arr[0]),
       counts: dco_decode_list_prim_u_32_strict(arr[1]),
       available: dco_decode_u_32(arr[2]),
       score: dco_decode_u_32(arr[3]),
       pickedEarlier: dco_decode_bool(arr[4]),
+    );
+  }
+
+  @protected
+  SlotTimes dco_decode_slot_times(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SlotTimes(
+      startMillis: dco_decode_i_64(arr[0]),
+      minutes: dco_decode_u_32(arr[1]),
     );
   }
 
@@ -532,6 +633,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SlotTimes sse_decode_box_autoadd_slot_times(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_slot_times(deserializer));
+  }
+
+  @protected
   StepOut sse_decode_box_autoadd_step_out(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_step_out(deserializer));
@@ -541,6 +648,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_u_32(deserializer));
+  }
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt32();
+  }
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getPlatformInt64();
   }
 
   @protected
@@ -642,6 +761,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SlotTimes? sse_decode_opt_box_autoadd_slot_times(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_slot_times(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   StepOut? sse_decode_opt_box_autoadd_step_out(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -668,7 +800,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_rows = sse_decode_list_row_out(deserializer);
     var var_ballots = sse_decode_u_32(deserializer);
-    var var_winnerDate = sse_decode_opt_String(deserializer);
+    var var_winnerSlot = sse_decode_opt_String(deserializer);
     var var_winnerAvailable = sse_decode_u_32(deserializer);
     var var_verificationError = sse_decode_opt_String(deserializer);
     var var_winnerChecksOut = sse_decode_bool(deserializer);
@@ -677,7 +809,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return OutcomeOut(
       rows: var_rows,
       ballots: var_ballots,
-      winnerDate: var_winnerDate,
+      winnerSlot: var_winnerSlot,
       winnerAvailable: var_winnerAvailable,
       verificationError: var_verificationError,
       winnerChecksOut: var_winnerChecksOut,
@@ -689,18 +821,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   RowOut sse_decode_row_out(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_date = sse_decode_String(deserializer);
+    var var_slot = sse_decode_String(deserializer);
     var var_counts = sse_decode_list_prim_u_32_strict(deserializer);
     var var_available = sse_decode_u_32(deserializer);
     var var_score = sse_decode_u_32(deserializer);
     var var_pickedEarlier = sse_decode_bool(deserializer);
     return RowOut(
-      date: var_date,
+      slot: var_slot,
       counts: var_counts,
       available: var_available,
       score: var_score,
       pickedEarlier: var_pickedEarlier,
     );
+  }
+
+  @protected
+  SlotTimes sse_decode_slot_times(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_startMillis = sse_decode_i_64(deserializer);
+    var var_minutes = sse_decode_u_32(deserializer);
+    return SlotTimes(startMillis: var_startMillis, minutes: var_minutes);
   }
 
   @protected
@@ -729,12 +869,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getInt32();
-  }
-
-  @protected
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
@@ -760,6 +894,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_slot_times(
+    SlotTimes self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_slot_times(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_step_out(StepOut self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_step_out(self, serializer);
@@ -769,6 +912,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self, serializer);
+  }
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt32(self);
+  }
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putPlatformInt64(self);
   }
 
   @protected
@@ -866,6 +1021,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_slot_times(
+    SlotTimes? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_slot_times(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_step_out(
     StepOut? self,
     SseSerializer serializer,
@@ -893,7 +1061,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_row_out(self.rows, serializer);
     sse_encode_u_32(self.ballots, serializer);
-    sse_encode_opt_String(self.winnerDate, serializer);
+    sse_encode_opt_String(self.winnerSlot, serializer);
     sse_encode_u_32(self.winnerAvailable, serializer);
     sse_encode_opt_String(self.verificationError, serializer);
     sse_encode_bool(self.winnerChecksOut, serializer);
@@ -904,11 +1072,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_row_out(RowOut self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_String(self.date, serializer);
+    sse_encode_String(self.slot, serializer);
     sse_encode_list_prim_u_32_strict(self.counts, serializer);
     sse_encode_u_32(self.available, serializer);
     sse_encode_u_32(self.score, serializer);
     sse_encode_bool(self.pickedEarlier, serializer);
+  }
+
+  @protected
+  void sse_encode_slot_times(SlotTimes self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_64(self.startMillis, serializer);
+    sse_encode_u_32(self.minutes, serializer);
   }
 
   @protected
@@ -933,11 +1108,5 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_unit(void self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-  }
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putInt32(self);
   }
 }

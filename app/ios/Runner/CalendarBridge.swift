@@ -2,7 +2,7 @@ import EventKit
 import Flutter
 import UIKit
 
-/// Adds the picked days straight to the person's calendar with EventKit.
+/// Adds the picked times straight to the person's calendar with EventKit.
 /// Asks only for write access (iOS 17+), so the app can add events but never
 /// read anything already in the calendar. Dart talks to it on the
 /// `whisperpoll/calendar` channel.
@@ -17,9 +17,9 @@ final class CalendarBridge: NSObject, FlutterPlugin {
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
-    case "addAllDayEvents":
+    case "addEvents":
       guard let args = call.arguments as? [String: Any],
-        let events = args["events"] as? [[String: String]]
+        let events = args["events"] as? [[String: Any]]
       else {
         result(FlutterError(code: "bad-args", message: "expected events", details: nil))
         return
@@ -38,8 +38,9 @@ final class CalendarBridge: NSObject, FlutterPlugin {
         }
       }
     case "openCalendar":
-      // Opens the Calendar app at the given ISO date.
-      if let iso = call.arguments as? String, let date = Self.day(iso) {
+      // Opens the Calendar app at the given moment (milliseconds since the epoch).
+      if let millis = call.arguments as? NSNumber {
+        let date = Date(timeIntervalSince1970: millis.doubleValue / 1000)
         let url = URL(string: "calshow:\(date.timeIntervalSinceReferenceDate)")!
         UIApplication.shared.open(url)
       }
@@ -57,8 +58,8 @@ final class CalendarBridge: NSObject, FlutterPlugin {
     }
   }
 
-  /// Saves one all-day event per `{date, title, notes}`; returns how many.
-  private func add(_ events: [[String: String]]) throws -> Int {
+  /// Saves one event per `{startMillis, minutes, title, notes}`; returns how many.
+  private func add(_ events: [[String: Any]]) throws -> Int {
     guard let calendar = store.defaultCalendarForNewEvents else {
       throw NSError(
         domain: "whisperpoll", code: 1,
@@ -66,27 +67,20 @@ final class CalendarBridge: NSObject, FlutterPlugin {
     }
     var added = 0
     for spec in events {
-      guard let iso = spec["date"], let day = Self.day(iso) else { continue }
+      guard let millis = spec["startMillis"] as? NSNumber,
+        let minutes = spec["minutes"] as? NSNumber
+      else { continue }
+      let start = Date(timeIntervalSince1970: millis.doubleValue / 1000)
       let event = EKEvent(eventStore: store)
       event.calendar = calendar
-      event.title = spec["title"]
-      event.notes = spec["notes"]
-      event.isAllDay = true
-      event.startDate = day
-      event.endDate = day
+      event.title = spec["title"] as? String
+      event.notes = spec["notes"] as? String
+      event.startDate = start
+      event.endDate = start.addingTimeInterval(minutes.doubleValue * 60)
       try store.save(event, span: .thisEvent, commit: false)
       added += 1
     }
     try store.commit()
     return added
-  }
-
-  /// Local midnight of an ISO `YYYY-MM-DD` date.
-  private static func day(_ iso: String) -> Date? {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "yyyy-MM-dd"
-    return formatter.date(from: iso)
   }
 }

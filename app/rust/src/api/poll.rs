@@ -7,6 +7,7 @@ use rand_core::OsRng;
 use whisperpoll_core::{cast_tiered_ballot, Receipt, TrusteeIdentity};
 use whisperpoll_protocol::calendar::{self, Event};
 use whisperpoll_protocol::client;
+use whisperpoll_protocol::slot::Slot;
 use whisperpoll_protocol::{ClientMsg, PollView};
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -91,7 +92,8 @@ pub fn cast_ballot(view_json: String, choices: Vec<Option<u32>>) -> Result<Ballo
 
 // Counts are u32 so they arrive in Dart as plain ints.
 pub struct RowOut {
-    pub date: String,
+    /// Canonical slot text.
+    pub slot: String,
     pub counts: Vec<u32>,
     pub available: u32,
     pub score: u32,
@@ -101,7 +103,7 @@ pub struct RowOut {
 pub struct OutcomeOut {
     pub rows: Vec<RowOut>,
     pub ballots: u32,
-    pub winner_date: Option<String>,
+    pub winner_slot: Option<String>,
     pub winner_available: u32,
     pub verification_error: Option<String>,
     pub winner_checks_out: bool,
@@ -133,7 +135,7 @@ pub fn outcomes(
                 .rows
                 .into_iter()
                 .map(|r| RowOut {
-                    date: r.date,
+                    slot: r.slot,
                     counts: r.counts.into_iter().map(|c| c as u32).collect(),
                     available: r.available as u32,
                     score: r.score as u32,
@@ -142,7 +144,7 @@ pub fn outcomes(
                 .collect(),
             ballots: o.ballots as u32,
             winner_available: o.winner.as_ref().map_or(0, |p| p.available as u32),
-            winner_date: o.winner.map(|p| p.date),
+            winner_slot: o.winner.map(|p| p.slot),
             verification_error: o.verification_error,
             winner_checks_out: o.winner_checks_out,
             decrypted_by: o.decrypted_by,
@@ -151,21 +153,49 @@ pub fn outcomes(
         .collect())
 }
 
-/// An `.ics` file with an all-day event per picked date.
+/// An `.ics` file with an event per picked slot (canonical slot text).
 #[flutter_rust_bridge::frb(sync)]
 pub fn calendar_ics(
     title: String,
     poll_id: String,
     stamp: String,
-    dates: Vec<String>,
+    slots: Vec<String>,
     notes: Vec<String>,
 ) -> String {
-    let events: Vec<Event> = dates
+    let events: Vec<Event> = slots
         .iter()
         .zip(notes)
-        .map(|(date, description)| Event { date, description })
+        .filter_map(|(slot, description)| {
+            Some(Event {
+                slot: Slot::parse(slot)?,
+                description,
+            })
+        })
         .collect();
     calendar::ics(&title, &poll_id, &stamp, &events)
+}
+
+/// Canonical slot text from a form's parts, or `None` if they're invalid.
+/// `offset_minutes` is the device's UTC offset at that local date and time.
+#[flutter_rust_bridge::frb(sync)]
+pub fn make_slot(date: String, time: String, offset_minutes: i32, minutes: u32) -> Option<String> {
+    Slot::new(&date, &time, offset_minutes, minutes).map(|s| s.to_string())
+}
+
+pub struct SlotTimes {
+    /// Start, in milliseconds since the Unix epoch.
+    pub start_millis: i64,
+    pub minutes: u32,
+}
+
+/// When a slot starts and how long it lasts, for display in local time.
+#[flutter_rust_bridge::frb(sync)]
+pub fn slot_times(slot: String) -> Option<SlotTimes> {
+    let slot = Slot::parse(&slot)?;
+    Some(SlotTimes {
+        start_millis: slot.start_epoch_millis(),
+        minutes: slot.minutes,
+    })
 }
 
 #[flutter_rust_bridge::frb(init)]

@@ -1,5 +1,6 @@
 use leptos::prelude::window;
 use wasm_bindgen::{JsCast, JsValue};
+use whisperpoll_protocol::slot::Slot;
 
 pub fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -16,17 +17,50 @@ pub fn from_hex<const N: usize>(hex: &str) -> Option<[u8; N]> {
     Some(out)
 }
 
-/// `2026-10-24` → `Sat 24 Oct`, in the viewer's locale order.
-pub fn pretty_date(iso: &str) -> String {
-    let date = js_sys::Date::new(&JsValue::from_str(&format!("{iso}T12:00:00")));
-    if date.get_time().is_nan() {
-        return iso.to_string();
-    }
+fn js_options(pairs: &[(&str, &str)]) -> js_sys::Object {
     let opts = js_sys::Object::new();
-    for (k, v) in [("weekday", "short"), ("day", "numeric"), ("month", "short")] {
-        let _ = js_sys::Reflect::set(&opts, &k.into(), &v.into());
+    for (k, v) in pairs {
+        let _ = js_sys::Reflect::set(&opts, &(*k).into(), &(*v).into());
     }
-    date.to_locale_date_string("en-GB", &opts).into()
+    opts
+}
+
+/// A slot (`2026-10-30T18:00+02:00/120`) in the viewer's time zone:
+/// `Fri 30 Oct, 18:00–20:00`.
+pub fn pretty_slot(text: &str) -> String {
+    let Some(slot) = Slot::parse(text) else {
+        return text.to_string();
+    };
+    let start = js_sys::Date::new(&JsValue::from_f64(slot.start_epoch_millis() as f64));
+    let end = js_sys::Date::new(&JsValue::from_f64(
+        (slot.end_epoch_minutes() * 60_000) as f64,
+    ));
+    let day = js_options(&[("weekday", "short"), ("day", "numeric"), ("month", "short")]);
+    let time = js_options(&[("hour", "2-digit"), ("minute", "2-digit")]);
+    let day: String = start.to_locale_date_string("en-GB", &day).into();
+    let from: String = start
+        .to_locale_time_string_with_options("en-GB", &time)
+        .into();
+    let to: String = end
+        .to_locale_time_string_with_options("en-GB", &time)
+        .into();
+    format!("{day}, {from}–{to}")
+}
+
+/// This browser's UTC offset in minutes at a local `date` and `time`
+/// (it differs across daylight-saving changes).
+pub fn local_offset_minutes(date: &str, time: &str) -> i32 {
+    let local = js_sys::Date::new(&JsValue::from_str(&format!("{date}T{time}:00")));
+    -(local.get_timezone_offset() as i32)
+}
+
+/// `90` → `1 h 30 min`.
+pub fn duration(minutes: u32) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
 }
 
 pub fn invite_url(poll: &str, token: &str) -> String {

@@ -34,10 +34,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_box_autoadd_bool(dynamic raw);
 
   @protected
+  SlotTimes dco_decode_box_autoadd_slot_times(dynamic raw);
+
+  @protected
   StepOut dco_decode_box_autoadd_step_out(dynamic raw);
 
   @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  int dco_decode_i_32(dynamic raw);
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
@@ -67,6 +76,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool? dco_decode_opt_box_autoadd_bool(dynamic raw);
 
   @protected
+  SlotTimes? dco_decode_opt_box_autoadd_slot_times(dynamic raw);
+
+  @protected
   StepOut? dco_decode_opt_box_autoadd_step_out(dynamic raw);
 
   @protected
@@ -77,6 +89,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RowOut dco_decode_row_out(dynamic raw);
+
+  @protected
+  SlotTimes dco_decode_slot_times(dynamic raw);
 
   @protected
   StepOut dco_decode_step_out(dynamic raw);
@@ -103,10 +118,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_box_autoadd_bool(SseDeserializer deserializer);
 
   @protected
+  SlotTimes sse_decode_box_autoadd_slot_times(SseDeserializer deserializer);
+
+  @protected
   StepOut sse_decode_box_autoadd_step_out(SseDeserializer deserializer);
 
   @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
@@ -136,6 +160,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer);
 
   @protected
+  SlotTimes? sse_decode_opt_box_autoadd_slot_times(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   StepOut? sse_decode_opt_box_autoadd_step_out(SseDeserializer deserializer);
 
   @protected
@@ -146,6 +175,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RowOut sse_decode_row_out(SseDeserializer deserializer);
+
+  @protected
+  SlotTimes sse_decode_slot_times(SseDeserializer deserializer);
 
   @protected
   StepOut sse_decode_step_out(SseDeserializer deserializer);
@@ -160,9 +192,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer);
-
-  @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
@@ -175,10 +204,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_slot_times(
+    SlotTimes self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_step_out(StepOut self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
@@ -220,6 +261,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_slot_times(
+    SlotTimes? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_step_out(
     StepOut? self,
     SseSerializer serializer,
@@ -235,6 +282,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_row_out(RowOut self, SseSerializer serializer);
 
   @protected
+  void sse_encode_slot_times(SlotTimes self, SseSerializer serializer);
+
+  @protected
   void sse_encode_step_out(StepOut self, SseSerializer serializer);
 
   @protected
@@ -245,9 +295,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer);
 }
 
 // Section: wire_class

@@ -87,9 +87,9 @@ pub fn next_step(
 /// One option's line in a round's results.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Row {
-    /// ISO `YYYY-MM-DD`.
-    pub date: String,
-    /// How many put this day in each tier, most preferred first.
+    /// Canonical slot text.
+    pub slot: String,
+    /// How many put this slot in each tier, most preferred first.
     pub counts: Vec<u64>,
     pub available: u64,
     pub score: u64,
@@ -99,7 +99,7 @@ pub struct Row {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Pick {
-    pub date: String,
+    pub slot: String,
     pub available: u64,
 }
 
@@ -141,7 +141,7 @@ pub fn round_outcome(view: &PollView, round: usize, receipt: Option<Receipt>) ->
             .order()
             .into_iter()
             .map(|o| Row {
-                date: view.options[o].clone(),
+                slot: view.options[o].clone(),
                 counts: result.counts[o].clone(),
                 available: result.available[o],
                 score: result.score[o],
@@ -150,7 +150,7 @@ pub fn round_outcome(view: &PollView, round: usize, receipt: Option<Receipt>) ->
             .collect(),
         ballots: tally.ballots,
         winner: r.winner.map(|o| Pick {
-            date: view.options[o].clone(),
+            slot: view.options[o].clone(),
             available: result.available[o],
         }),
         verification_error,

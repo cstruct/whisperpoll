@@ -25,6 +25,7 @@
 
 pub mod calendar;
 pub mod client;
+pub mod slot;
 
 use serde::{Deserialize, Serialize};
 use whisperpoll_core::{
@@ -82,9 +83,9 @@ pub struct InviteLink {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct DateSuggestion {
-    /// ISO `YYYY-MM-DD`.
-    pub date: String,
+pub struct SlotSuggestion {
+    /// Canonical [`slot::Slot`] text, e.g. `2026-10-30T18:00+02:00/120`.
+    pub slot: String,
     pub by: String,
 }
 
@@ -112,9 +113,10 @@ pub struct PollView {
     pub me: usize,
     pub participants: Vec<ParticipantView>,
     pub invites: Vec<InviteLink>,
-    pub dates: Vec<DateSuggestion>,
+    /// Suggested slots, earliest first.
+    pub slots: Vec<SlotSuggestion>,
     pub ceremony: Option<CeremonyView>,
-    /// The locked candidate dates, once the ceremony has started.
+    /// The locked candidate slots (canonical text), once the ceremony has started.
     pub options: Vec<String>,
     /// How many days the poll is looking for.
     pub days: usize,
@@ -140,8 +142,9 @@ pub enum ClientMsg {
     Invite {
         name: String,
     },
-    SuggestDate {
-        date: String,
+    /// Suggest a slot, as canonical [`slot::Slot`] text.
+    SuggestSlot {
+        slot: String,
     },
     StartCeremony {
         threshold: usize,

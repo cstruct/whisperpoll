@@ -1,67 +1,13 @@
-//! Calendar export for the picked days: an iCalendar (`.ics`) file with one
-//! all-day event per day, and Google Calendar "add event" links.
+//! Calendar export for the picked slots: an iCalendar (`.ics`) file with one
+//! event per slot, and Google Calendar "add event" links. Times are written
+//! in UTC, so every calendar shows them in its own time zone.
 
-/// One day to put in the calendar.
-pub struct Event<'a> {
-    /// ISO `YYYY-MM-DD`.
-    pub date: &'a str,
+use crate::slot::{utc_stamp, Slot};
+
+/// One slot to put in the calendar.
+pub struct Event {
+    pub slot: Slot,
     pub description: String,
-}
-
-fn parse(date: &str) -> Option<(u32, u32, u32)> {
-    if !crate::is_iso_date(date) {
-        return None;
-    }
-    Some((
-        date[..4].parse().ok()?,
-        date[5..7].parse().ok()?,
-        date[8..].parse().ok()?,
-    ))
-}
-
-/// `2026-10-25` → `Sun 25 Oct`, for texts the server writes (like push
-/// notifications); clients format dates in the viewer's locale instead.
-pub fn short_date(date: &str) -> String {
-    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let Some((y, m, d)) = parse(date) else {
-        return date.to_string();
-    };
-    // Sakamoto's day-of-week method.
-    const OFFSETS: [u32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
-    let y_ = if m < 3 { y - 1 } else { y };
-    let weekday = (y_ + y_ / 4 - y_ / 100 + y_ / 400 + OFFSETS[m as usize - 1] + d) % 7;
-    format!("{} {d} {}", DAYS[weekday as usize], MONTHS[m as usize - 1])
-}
-
-fn days_in_month(year: u32, month: u32) -> u32 {
-    match month {
-        2 if (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400) => {
-            29
-        }
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    }
-}
-
-/// `YYYYMMDD` for `date` and for the day after, which is where an all-day
-/// event ends.
-fn day_and_next(date: &str) -> Option<(String, String)> {
-    let (y, m, d) = parse(date)?;
-    let (ny, nm, nd) = if d < days_in_month(y, m) {
-        (y, m, d + 1)
-    } else if m < 12 {
-        (y, m + 1, 1)
-    } else {
-        (y + 1, 1, 1)
-    };
-    Some((
-        format!("{y:04}{m:02}{d:02}"),
-        format!("{ny:04}{nm:02}{nd:02}"),
-    ))
 }
 
 /// Escapes a TEXT value (RFC 5545 §3.3.11).
@@ -96,8 +42,8 @@ fn fold(line: &str, out: &mut String) {
     out.push_str("\r\n");
 }
 
-/// An `.ics` file with an all-day event per day. `stamp` is the creation time
-/// as `YYYYMMDDTHHMMSSZ`; `uid_base` should be unique to the poll so that
+/// An `.ics` file with an event per slot. `stamp` is the creation time as
+/// `YYYYMMDDTHHMMSSZ`; `uid_base` should be unique to the poll so that
 /// re-importing updates the events instead of duplicating them.
 pub fn ics(title: &str, uid_base: &str, stamp: &str, events: &[Event]) -> String {
     let mut out = String::new();
@@ -111,15 +57,14 @@ pub fn ics(title: &str, uid_base: &str, stamp: &str, events: &[Event]) -> String
         fold(line, &mut out);
     }
     for event in events {
-        let Some((start, end)) = day_and_next(event.date) else {
-            continue;
-        };
+        let start = utc_stamp(event.slot.start_epoch_minutes());
+        let end = utc_stamp(event.slot.end_epoch_minutes());
         for line in [
             "BEGIN:VEVENT".to_string(),
             format!("UID:{uid_base}-{start}@whisperpoll"),
             format!("DTSTAMP:{stamp}"),
-            format!("DTSTART;VALUE=DATE:{start}"),
-            format!("DTEND;VALUE=DATE:{end}"),
+            format!("DTSTART:{start}"),
+            format!("DTEND:{end}"),
             format!("SUMMARY:{}", escape(title)),
             format!("DESCRIPTION:{}", escape(&event.description)),
             "END:VEVENT".to_string(),
@@ -142,60 +87,46 @@ fn percent_encode(text: &str) -> String {
         .collect()
 }
 
-/// A link that opens Google Calendar's "new event" form for one all-day event.
-pub fn google_link(title: &str, event: &Event) -> Option<String> {
-    let (start, end) = day_and_next(event.date)?;
-    Some(format!(
-        "https://calendar.google.com/calendar/render?action=TEMPLATE&text={}&dates={start}/{end}&details={}",
+/// A link that opens Google Calendar's "new event" form for one slot.
+pub fn google_link(title: &str, event: &Event) -> String {
+    format!(
+        "https://calendar.google.com/calendar/render?action=TEMPLATE&text={}&dates={}/{}&details={}",
         percent_encode(title),
+        utc_stamp(event.slot.start_epoch_minutes()),
+        utc_stamp(event.slot.end_epoch_minutes()),
         percent_encode(&event.description),
-    ))
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn event(date: &str) -> Event<'_> {
+    fn event(slot: &str) -> Event {
         Event {
-            date,
+            slot: Slot::parse(slot).unwrap(),
             description: "3 of 3 can make it".into(),
         }
     }
 
     #[test]
-    fn all_day_events_end_the_next_day() {
-        for (date, start, end) in [
-            ("2026-10-24", "20261024", "20261025"),
-            ("2026-10-31", "20261031", "20261101"),
-            ("2026-12-31", "20261231", "20270101"),
-            ("2028-02-28", "20280228", "20280229"),
-            ("2026-02-28", "20260228", "20260301"),
-            ("2100-02-28", "21000228", "21000301"),
-            ("2000-02-28", "20000228", "20000229"),
-        ] {
-            assert_eq!(
-                day_and_next(date),
-                Some((start.into(), end.into())),
-                "{date}"
-            );
-        }
-        assert_eq!(day_and_next("not a date"), None);
-    }
-
-    #[test]
-    fn ics_has_one_event_per_day() {
+    fn ics_has_one_timed_event_per_slot() {
         let cal = ics(
             "Dinner; drinks, etc.",
             "abc",
             "20261019T120000Z",
-            &[event("2026-10-25"), event("2026-10-31")],
+            &[
+                event("2026-10-25T18:00+02:00/120"),
+                event("2026-10-31T23:30+01:00/90"),
+            ],
         );
         assert!(cal.starts_with("BEGIN:VCALENDAR\r\n"));
         assert!(cal.ends_with("END:VCALENDAR\r\n"));
         assert_eq!(cal.matches("BEGIN:VEVENT").count(), 2);
-        assert!(cal.contains("DTSTART;VALUE=DATE:20261031\r\nDTEND;VALUE=DATE:20261101\r\n"));
-        assert!(cal.contains("UID:abc-20261025@whisperpoll\r\n"));
+        assert!(cal.contains("DTSTART:20261025T160000Z\r\nDTEND:20261025T180000Z\r\n"));
+        // 23:30 at +01:00 is 22:30 UTC; 90 minutes later is past midnight.
+        assert!(cal.contains("DTSTART:20261031T223000Z\r\nDTEND:20261101T000000Z\r\n"));
+        assert!(cal.contains("UID:abc-20261025T160000Z@whisperpoll\r\n"));
         assert!(cal.contains("SUMMARY:Dinner\\; drinks\\, etc.\r\n"));
         // Every line ends in CRLF; no bare LFs.
         assert!(!cal.replace("\r\n", "").contains('\n'));
@@ -204,7 +135,12 @@ mod tests {
     #[test]
     fn long_lines_are_folded_without_splitting_characters() {
         let title = "Très long titre ".repeat(10);
-        let cal = ics(&title, "abc", "20261019T120000Z", &[event("2026-10-25")]);
+        let cal = ics(
+            &title,
+            "abc",
+            "20261019T120000Z",
+            &[event("2026-10-25T18:00Z/60")],
+        );
         for line in cal.split("\r\n") {
             assert!(line.len() <= 75, "{line:?}");
         }
@@ -213,17 +149,9 @@ mod tests {
     }
 
     #[test]
-    fn short_dates_have_the_right_weekday() {
-        assert_eq!(short_date("2026-10-25"), "Sun 25 Oct");
-        assert_eq!(short_date("2024-02-29"), "Thu 29 Feb");
-        assert_eq!(short_date("2000-01-01"), "Sat 1 Jan");
-        assert_eq!(short_date("nonsense"), "nonsense");
-    }
-
-    #[test]
     fn google_link_is_encoded() {
-        let link = google_link("Dinner & drinks", &event("2026-10-25")).unwrap();
+        let link = google_link("Dinner & drinks", &event("2026-10-25T18:00+02:00/120"));
         assert!(link.contains("text=Dinner%20%26%20drinks"));
-        assert!(link.contains("dates=20261025/20261026"));
+        assert!(link.contains("dates=20261025T160000Z/20261025T180000Z"));
     }
 }

@@ -7,6 +7,7 @@ use web_sys::HtmlInputElement;
 use whisperpoll_core::cast_tiered_ballot;
 use whisperpoll_protocol::calendar::{self, Event};
 use whisperpoll_protocol::client::{finished_outcomes, Outcome};
+use whisperpoll_protocol::slot::Slot;
 use whisperpoll_protocol::{ClientMsg, Phase, PollView, TIERS};
 
 use crate::net::{self, Conn};
@@ -160,7 +161,7 @@ fn Steps() -> impl IntoView {
             Phase::Tallying | Phase::Done | Phase::Failed { .. } => 2,
         })
     };
-    let steps = ["Invite & dates", "Vote", "Result"];
+    let steps = ["Invite & times", "Vote", "Result"];
     view! {
         <ol class="steps">
             {steps
@@ -257,19 +258,36 @@ fn Participants() -> impl IntoView {
     }
 }
 
+/// Durations offered when suggesting a slot, in minutes.
+const DURATIONS: [u32; 10] = [30, 60, 90, 120, 150, 180, 240, 300, 360, 480];
+
 #[component]
 fn Gathering() -> impl IntoView {
     let conn = session().conn;
     let date = RwSignal::new(String::new());
+    // Time and duration stay as they are after adding a slot (and are
+    // remembered for next time), so several days only need their dates.
+    let (last_time, last_minutes) = store::slot_defaults();
+    let time = RwSignal::new(last_time);
+    let minutes = RwSignal::new(last_minutes);
     let suggest = move |ev: SubmitEvent| {
         ev.prevent_default();
-        let d = date.get();
-        if !d.is_empty() {
-            net::send(&ClientMsg::SuggestDate { date: d });
-            date.set(String::new());
+        let (d, t, m) = (date.get(), time.get(), minutes.get());
+        let offset = util::local_offset_minutes(&d, &t);
+        match Slot::new(&d, &t, offset, m) {
+            Some(slot) => {
+                net::send(&ClientMsg::SuggestSlot {
+                    slot: slot.to_string(),
+                });
+                store::save_slot_defaults(&t, m);
+                date.set(String::new());
+            }
+            None => conn
+                .error
+                .set(Some("Pick a date, a start time and a duration.".into())),
         }
     };
-    let dates = move || read(conn, Vec::new(), |v| v.dates.clone());
+    let dates = move || read(conn, Vec::new(), |v| v.slots.clone());
     let is_creator = move || read(conn, false, PollView::is_creator);
     let creator_name = move || {
         read(conn, String::new(), |v| {
@@ -283,19 +301,19 @@ fn Gathering() -> impl IntoView {
 
     view! {
         <div class="card stack">
-            <h2>"Suggest dates"</h2>
-            <p class="muted">"Anyone can add a day. The list is locked when voting opens."</p>
+            <h2>"Suggest times"</h2>
+            <p class="muted">"Anyone can add a time. The list is locked when voting opens."</p>
             <ul class="dates">
                 {move || {
                     let ds = dates();
                     if ds.is_empty() {
-                        view! { <li class="muted">"No dates yet."</li> }.into_any()
+                        view! { <li class="muted">"No times yet."</li> }.into_any()
                     } else {
                         ds.into_iter()
                             .map(|d| {
                                 view! {
                                     <li>
-                                        <span class="date">{util::pretty_date(&d.date)}</span>
+                                        <span class="date">{util::pretty_slot(&d.slot)}</span>
                                         <span class="muted">{format!("suggested by {}", d.by)}</span>
                                     </li>
                                 }
@@ -305,13 +323,35 @@ fn Gathering() -> impl IntoView {
                     }
                 }}
             </ul>
-            <form class="row" on:submit=suggest>
+            <form class="row slot-form" on:submit=suggest>
                 <input
                     type="date"
+                    aria-label="Date"
                     prop:value=move || date.get()
                     on:input=move |ev| date.set(event_target_value(&ev))
                 />
-                <button type="submit" class="secondary">"Add date"</button>
+                <input
+                    type="time"
+                    aria-label="Start time"
+                    prop:value=move || time.get()
+                    on:input=move |ev| time.set(event_target_value(&ev))
+                />
+                <select
+                    aria-label="Duration"
+                    on:change=move |ev| minutes.set(event_target_value(&ev).parse().unwrap_or(120))
+                >
+                    {DURATIONS
+                        .iter()
+                        .map(|&m| {
+                            view! {
+                                <option value=m.to_string() prop:selected=move || minutes.get() == m>
+                                    {util::duration(m)}
+                                </option>
+                            }
+                        })
+                        .collect_view()}
+                </select>
+                <button type="submit" class="secondary">"Add time"</button>
             </form>
         </div>
         <p class="hint">
@@ -323,7 +363,7 @@ fn Gathering() -> impl IntoView {
                 view! {
                     <div class="card muted">
                         {move || format!(
-                            "Waiting for {} to lock the dates and open voting.",
+                            "Waiting for {} to lock the times and open voting.",
                             creator_name(),
                         )}
                     </div>
@@ -414,8 +454,8 @@ fn StartCeremony() -> impl IntoView {
                 .count()
         })
     };
-    let has_dates = move || read(conn, false, |v| !v.dates.is_empty());
-    let date_count = move || read(conn, 0, |v| v.dates.len());
+    let has_dates = move || read(conn, false, |v| !v.slots.is_empty());
+    let date_count = move || read(conn, 0, |v| v.slots.len());
     let days = RwSignal::new(1usize);
     let chosen = RwSignal::new(0usize);
     let threshold = move || {
@@ -448,10 +488,10 @@ fn StartCeremony() -> impl IntoView {
 
     view! {
         <div class="card stack">
-            <h2>"Lock dates & open voting"</h2>
+            <h2>"Lock times & open voting"</h2>
             <p class="muted">
                 {move || format!(
-                    "Everyone who has opened their link ({} so far) becomes a trustee: their browsers create the poll's key together, so no single person can unlock a ballot. That needs their pages open for a moment after you lock the dates.",
+                    "Everyone who has opened their link ({} so far) becomes a trustee: their browsers create the poll's key together, so no single person can unlock a ballot. That needs their pages open for a moment after you lock the times.",
                     registered(),
                 )}
             </p>
@@ -474,14 +514,14 @@ fn StartCeremony() -> impl IntoView {
             </label>
             <p class="hint">{hint}</p>
             <label class="field inline">
-                <span>"Days to find"</span>
+                <span>"Meetings to pick"</span>
                 <select on:change=move |ev| days.set(event_target_value(&ev).parse().unwrap_or(1))>
                     {move || {
                         (1..=date_count().max(1))
                             .map(|d| {
                                 view! {
                                     <option value=d.to_string() prop:selected=move || days.get() == d>
-                                        {if d == 1 { "1 day".to_string() } else { format!("{d} days") }}
+                                        {if d == 1 { "1 meeting".to_string() } else { format!("{d} meetings") }}
                                     </option>
                                 }
                             })
@@ -491,13 +531,13 @@ fn StartCeremony() -> impl IntoView {
             </label>
             <p class="hint">
                 {move || if days.get() > 1 {
-                    "Days are picked one at a time. After each pick, everyone can update their vote for the next one, or keep it."
+                    "Meetings are picked one at a time. After each pick, everyone can update their vote for the next one, or keep it."
                 } else {
-                    "Need more than one meeting? Days are then picked one at a time."
+                    "Need more than one meeting? They're then picked one at a time."
                 }}
             </p>
             <button on:click=start disabled=move || !has_dates() || registered() == 0>
-                "Lock dates & open voting"
+                "Lock times & open voting"
             </button>
         </div>
     }
@@ -623,7 +663,7 @@ fn KeyElsewhere() -> impl IntoView {
 fn day_list(options: &[String], picked: &[usize]) -> String {
     picked
         .iter()
-        .map(|&o| util::pretty_date(&options[o]))
+        .map(|&o| util::pretty_slot(&options[o]))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -639,7 +679,7 @@ fn Voting() -> impl IntoView {
             .unwrap_or_default()
     });
 
-    // Later rounds start from your last vote; picked days can't win again.
+    // Later rounds start from your last vote; picked times can't win again.
     let remembered = ids
         .with_value(|(id, token)| store::choices(id, token))
         .filter(|c| round > 1 && c.len() == options.len())
@@ -698,9 +738,9 @@ fn Voting() -> impl IntoView {
 
     let taken = day_list(&options, &picked);
     let heading = if days > 1 {
-        format!("Day {round} of {days}: how well does each day work for you?")
+        format!("Meeting {round} of {days}: how well does each time work for you?")
     } else {
-        "How well does each day work for you?".to_string()
+        "How well does each time work for you?".to_string()
     };
 
     let form = {
@@ -711,7 +751,7 @@ fn Voting() -> impl IntoView {
                 .enumerate()
                 .map(|(i, date)| {
                     let control = if let Some(k) = picked.iter().position(|&p| p == i) {
-                        view! { <span class="muted">{format!("Picked for day {}", k + 1)}</span> }
+                        view! { <span class="muted">{format!("Picked for meeting {}", k + 1)}</span> }
                             .into_any()
                     } else {
                         let buttons = (0..=TIERS.len())
@@ -734,7 +774,7 @@ fn Voting() -> impl IntoView {
                     };
                     view! {
                         <div class="ballot-row" class:taken=picked.contains(&i)>
-                            <span class="date">{util::pretty_date(date)}</span>
+                            <span class="date">{util::pretty_slot(date)}</span>
                             {control}
                         </div>
                     }
@@ -769,7 +809,7 @@ fn Voting() -> impl IntoView {
                 <div class="card stack">
                     <h2>
                         {if days > 1 {
-                            format!("You're set for day {round}")
+                            format!("You're set for meeting {round}")
                         } else {
                             "Your vote is in".to_string()
                         }}
@@ -790,7 +830,7 @@ fn Voting() -> impl IntoView {
         } else {
             view! {
                 <div class="card stack">
-                    <h2>{format!("Day {round} of {days}")}</h2>
+                    <h2>{format!("Meeting {round} of {days}")}</h2>
                     <p>
                         {format!(
                             "Your vote from the last round still counts. Keep it, or update it now that {} is taken.",
@@ -861,7 +901,7 @@ fn Tallying() -> impl IntoView {
                 {move || {
                     let (_, _, round, days) = progress();
                     if days > 1 {
-                        format!("Revealing day {round} of {days}")
+                        format!("Revealing meeting {round} of {days}")
                     } else {
                         "Revealing the result".to_string()
                     }
@@ -900,9 +940,9 @@ fn finished_rounds() -> Memo<Vec<Outcome>> {
 fn RoundDetails(outcome: Outcome, round: usize, days: usize, open: bool) -> impl IntoView {
     let o = outcome;
     let title = match (&o.winner, days) {
-        (Some(pick), 1) => format!("Result: {}", util::pretty_date(&pick.date)),
-        (Some(pick), _) => format!("Day {round}: {}", util::pretty_date(&pick.date)),
-        (None, _) => format!("Day {round}: no date found"),
+        (Some(pick), 1) => format!("Result: {}", util::pretty_slot(&pick.slot)),
+        (Some(pick), _) => format!("Meeting {round}: {}", util::pretty_slot(&pick.slot)),
+        (None, _) => format!("Meeting {round}: no time found"),
     };
     let checks_out = o.checks_out();
     view! {
@@ -927,7 +967,7 @@ fn RoundDetails(outcome: Outcome, round: usize, days: usize, open: bool) -> impl
                         {o.rows.iter().map(|row| view! {
                             <tr class:earlier=row.picked_earlier>
                                 <th>
-                                    {util::pretty_date(&row.date)}
+                                    {util::pretty_slot(&row.slot)}
                                     {row.picked_earlier.then_some(view! { <span class="tag">"picked"</span> })}
                                 </th>
                                 {row.counts.iter().map(|c| view! { <td>{*c}</td> }).collect_view()}
@@ -938,8 +978,8 @@ fn RoundDetails(outcome: Outcome, round: usize, days: usize, open: bool) -> impl
                     </tbody>
                 </table>
                 <p class="muted">
-                    "Days are ranked by how many can come, then by preference (3 / 2 / 1 points)."
-                    {(round > 1).then_some(" Days picked in earlier rounds can't win again.")}
+                    "Times are ranked by how many can come, then by preference (3 / 2 / 1 points)."
+                    {(round > 1).then_some(" Times picked in earlier rounds can't win again.")}
                 </p>
                 {match &o.verification_error {
                     None => view! {
@@ -964,7 +1004,7 @@ fn RoundDetails(outcome: Outcome, round: usize, days: usize, open: bool) -> impl
     }
 }
 
-/// While a later round is running: the days picked so far, with their proofs.
+/// While a later round is running: the times picked so far, with their proofs.
 #[component]
 fn PickedSoFar() -> impl IntoView {
     let conn = session().conn;
@@ -981,8 +1021,8 @@ fn PickedSoFar() -> impl IntoView {
     }
 }
 
-/// "Add to calendar" for the picked days: one `.ics` with all of them, plus a
-/// Google Calendar link per day. Built entirely in the browser.
+/// "Add to calendar" for the picked times: one `.ics` with all of them, plus a
+/// Google Calendar link per time. Built entirely in the browser.
 #[component]
 fn CalendarExport(outcomes: Vec<Outcome>) -> impl IntoView {
     let conn = session().conn;
@@ -991,7 +1031,7 @@ fn CalendarExport(outcomes: Vec<Outcome>) -> impl IntoView {
             .map(|v| (v.title.clone(), v.id.clone()))
             .unwrap_or_default()
     });
-    let picks: Vec<(String, String)> = outcomes
+    let picks: Vec<(Slot, String)> = outcomes
         .iter()
         .filter_map(|o| {
             let pick = o.winner.as_ref()?;
@@ -999,7 +1039,7 @@ fn CalendarExport(outcomes: Vec<Outcome>) -> impl IntoView {
                 "{} of {} can make it. Picked with whisperpoll.",
                 pick.available, o.ballots
             );
-            Some((pick.date.clone(), note))
+            Some((Slot::parse(&pick.slot)?, note))
         })
         .collect();
     if picks.is_empty() {
@@ -1016,8 +1056,8 @@ fn CalendarExport(outcomes: Vec<Outcome>) -> impl IntoView {
         move |_| {
             let events: Vec<Event> = all
                 .iter()
-                .map(|(date, note)| Event {
-                    date,
+                .map(|(slot, note)| Event {
+                    slot: *slot,
                     description: note.clone(),
                 })
                 .collect();
@@ -1028,22 +1068,22 @@ fn CalendarExport(outcomes: Vec<Outcome>) -> impl IntoView {
     };
     let google = picks
         .iter()
-        .filter_map(|(date, note)| {
+        .map(|(slot, note)| {
             let event = Event {
-                date,
+                slot: *slot,
                 description: note.clone(),
             };
-            let href = calendar::google_link(&title, &event)?;
+            let href = calendar::google_link(&title, &event);
             let label = if picks.len() == 1 {
                 "Google Calendar".to_string()
             } else {
-                format!("Google: {}", util::pretty_date(date))
+                format!("Google: {}", util::pretty_slot(&slot.to_string()))
             };
-            Some(view! {
+            view! {
                 <a class="button-link" href=href target="_blank" rel="noopener noreferrer">
                     {label}
                 </a>
-            })
+            }
         })
         .collect_view();
     view! {
@@ -1073,8 +1113,8 @@ fn Results() -> impl IntoView {
             match &outcomes[0].winner {
                 Some(pick) => view! {
                     <div class="card winner">
-                        <span class="muted">"Best day"</span>
-                        <h2>{util::pretty_date(&pick.date)}</h2>
+                        <span class="muted">"Best time"</span>
+                        <h2>{util::pretty_slot(&pick.slot)}</h2>
                         <p>{format!("{} of {} can make it", pick.available, outcomes[0].ballots)}</p>
                         <CalendarExport outcomes=outcomes.clone() />
                     </div>
@@ -1082,8 +1122,8 @@ fn Results() -> impl IntoView {
                 .into_any(),
                 None => view! {
                     <div class="card winner">
-                        <h2>"No date works"</h2>
-                        <p>"Nobody can make any of the suggested days."</p>
+                        <h2>"No time works"</h2>
+                        <p>"Nobody can make any of the suggested times."</p>
                     </div>
                 }
                 .into_any(),
@@ -1093,7 +1133,7 @@ fn Results() -> impl IntoView {
             view! {
                 <div class="card winner">
                     <span class="muted">
-                        {format!("Found {found} of {days} day{}", if days == 1 { "" } else { "s" })}
+                        {format!("Found {found} of {days} meeting{}", if days == 1 { "" } else { "s" })}
                     </span>
                     <ol class="picked">
                         {outcomes
@@ -1101,13 +1141,13 @@ fn Results() -> impl IntoView {
                             .map(|o| match &o.winner {
                                 Some(pick) => view! {
                                     <li>
-                                        <strong>{util::pretty_date(&pick.date)}</strong>
+                                        <strong>{util::pretty_slot(&pick.slot)}</strong>
                                         <span class="muted">{format!(" — {} of {} can make it", pick.available, o.ballots)}</span>
                                     </li>
                                 }
                                 .into_any(),
                                 None => view! {
-                                    <li class="muted">"No remaining day works for anyone, so the search stopped here."</li>
+                                    <li class="muted">"No remaining time works for anyone, so the search stopped here."</li>
                                 }
                                 .into_any(),
                             })

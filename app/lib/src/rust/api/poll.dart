@@ -48,20 +48,38 @@ Future<List<OutcomeOut>> outcomes({
   receipts: receipts,
 );
 
-/// An `.ics` file with an all-day event per picked date.
+/// An `.ics` file with an event per picked slot (canonical slot text).
 String calendarIcs({
   required String title,
   required String pollId,
   required String stamp,
-  required List<String> dates,
+  required List<String> slots,
   required List<String> notes,
 }) => RustLib.instance.api.crateApiPollCalendarIcs(
   title: title,
   pollId: pollId,
   stamp: stamp,
-  dates: dates,
+  slots: slots,
   notes: notes,
 );
+
+/// Canonical slot text from a form's parts, or `None` if they're invalid.
+/// `offset_minutes` is the device's UTC offset at that local date and time.
+String? makeSlot({
+  required String date,
+  required String time,
+  required int offsetMinutes,
+  required int minutes,
+}) => RustLib.instance.api.crateApiPollMakeSlot(
+  date: date,
+  time: time,
+  offsetMinutes: offsetMinutes,
+  minutes: minutes,
+);
+
+/// When a slot starts and how long it lasts, for display in local time.
+SlotTimes? slotTimes({required String slot}) =>
+    RustLib.instance.api.crateApiPollSlotTimes(slot: slot);
 
 class BallotOut {
   final String msgJson;
@@ -84,7 +102,7 @@ class BallotOut {
 class OutcomeOut {
   final List<RowOut> rows;
   final int ballots;
-  final String? winnerDate;
+  final String? winnerSlot;
   final int winnerAvailable;
   final String? verificationError;
   final bool winnerChecksOut;
@@ -94,7 +112,7 @@ class OutcomeOut {
   const OutcomeOut({
     required this.rows,
     required this.ballots,
-    this.winnerDate,
+    this.winnerSlot,
     required this.winnerAvailable,
     this.verificationError,
     required this.winnerChecksOut,
@@ -106,7 +124,7 @@ class OutcomeOut {
   int get hashCode =>
       rows.hashCode ^
       ballots.hashCode ^
-      winnerDate.hashCode ^
+      winnerSlot.hashCode ^
       winnerAvailable.hashCode ^
       verificationError.hashCode ^
       winnerChecksOut.hashCode ^
@@ -120,7 +138,7 @@ class OutcomeOut {
           runtimeType == other.runtimeType &&
           rows == other.rows &&
           ballots == other.ballots &&
-          winnerDate == other.winnerDate &&
+          winnerSlot == other.winnerSlot &&
           winnerAvailable == other.winnerAvailable &&
           verificationError == other.verificationError &&
           winnerChecksOut == other.winnerChecksOut &&
@@ -129,14 +147,15 @@ class OutcomeOut {
 }
 
 class RowOut {
-  final String date;
+  /// Canonical slot text.
+  final String slot;
   final Uint32List counts;
   final int available;
   final int score;
   final bool pickedEarlier;
 
   const RowOut({
-    required this.date,
+    required this.slot,
     required this.counts,
     required this.available,
     required this.score,
@@ -145,7 +164,7 @@ class RowOut {
 
   @override
   int get hashCode =>
-      date.hashCode ^
+      slot.hashCode ^
       counts.hashCode ^
       available.hashCode ^
       score.hashCode ^
@@ -156,11 +175,30 @@ class RowOut {
       identical(this, other) ||
       other is RowOut &&
           runtimeType == other.runtimeType &&
-          date == other.date &&
+          slot == other.slot &&
           counts == other.counts &&
           available == other.available &&
           score == other.score &&
           pickedEarlier == other.pickedEarlier;
+}
+
+class SlotTimes {
+  /// Start, in milliseconds since the Unix epoch.
+  final PlatformInt64 startMillis;
+  final int minutes;
+
+  const SlotTimes({required this.startMillis, required this.minutes});
+
+  @override
+  int get hashCode => startMillis.hashCode ^ minutes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SlotTimes &&
+          runtimeType == other.runtimeType &&
+          startMillis == other.startMillis &&
+          minutes == other.minutes;
 }
 
 class StepOut {

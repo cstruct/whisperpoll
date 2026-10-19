@@ -10,16 +10,16 @@ use whisperpoll_core::{
     combine_tally, Ballot, BulletinBoard, Ceremony, Complaint, Dealing, DkgError,
     PartialDecryption, Poll, Receipt, Registration, TallyResult, TieredResult,
 };
-use whisperpoll_protocol::calendar::short_date;
+use whisperpoll_protocol::slot::Slot;
 use whisperpoll_protocol::{
-    is_iso_date, round_winner, CeremonyView, ClientMsg, DateSuggestion, InviteLink,
-    ParticipantView, Phase, PollView, RoundView, BALLOT_KIND,
+    round_winner, CeremonyView, ClientMsg, InviteLink, ParticipantView, Phase, PollView, RoundView,
+    SlotSuggestion, BALLOT_KIND,
 };
 
 const MAX_NAME: usize = 40;
 const MAX_TITLE: usize = 100;
 const MAX_PARTICIPANTS: usize = 50;
-const MAX_DATES: usize = 30;
+const MAX_SLOTS: usize = 30;
 const MAX_DEVICES: usize = 5;
 
 /// What a participant's device is needed for right now. A push goes out
@@ -83,7 +83,7 @@ pub struct Room {
     title: String,
     phase: Phase,
     members: Vec<Member>,
-    dates: Vec<DateSuggestion>,
+    slots: Vec<SlotSuggestion>,
     key: Option<KeyCeremony>,
     options: Vec<String>,
     days: usize,
@@ -127,7 +127,7 @@ impl Room {
                 devices: Vec::new(),
                 notified: None,
             }],
-            dates: Vec::new(),
+            slots: Vec::new(),
             key: None,
             options: Vec::new(),
             days: 1,
@@ -187,7 +187,7 @@ impl Room {
         match msg {
             ClientMsg::Register(reg) => self.register(who, reg),
             ClientMsg::Invite { name } => self.invite(who, &name),
-            ClientMsg::SuggestDate { date } => self.suggest_date(who, date),
+            ClientMsg::SuggestSlot { slot } => self.suggest_slot(who, &slot),
             ClientMsg::StartCeremony { threshold, days } => {
                 self.start_ceremony(who, threshold, days)
             }
@@ -299,39 +299,41 @@ impl Room {
         Ok(())
     }
 
-    fn suggest_date(&mut self, who: usize, date: String) -> Result<(), String> {
+    fn suggest_slot(&mut self, who: usize, slot: &str) -> Result<(), String> {
         self.require_phase(Phase::Gathering)?;
-        if !is_iso_date(&date) {
-            return Err("dates look like 2026-10-24".into());
-        }
-        if self.dates.iter().any(|d| d.date == date) {
+        let slot = Slot::parse(slot)
+            .ok_or("a slot needs a date, a start time and a duration of 15 minutes to a day")?;
+        let text = slot.to_string();
+        if self.slots.iter().any(|s| s.slot == text) {
             return Ok(());
         }
-        if self.dates.len() >= MAX_DATES {
-            return Err("too many dates".into());
+        if self.slots.len() >= MAX_SLOTS {
+            return Err("too many suggestions".into());
         }
-        self.dates.push(DateSuggestion {
-            date,
+        self.slots.push(SlotSuggestion {
+            slot: text,
             by: self.members[who].name.clone(),
         });
-        self.dates.sort_by(|a, b| a.date.cmp(&b.date));
+        // Earliest first, comparing instants (suggesters may be in different time zones).
+        self.slots
+            .sort_by_key(|s| Slot::parse(&s.slot).map(|s| s.start_epoch_minutes()));
         Ok(())
     }
 
     fn start_ceremony(&mut self, who: usize, threshold: usize, days: usize) -> Result<(), String> {
         self.require_creator(who)?;
         self.require_phase(Phase::Gathering)?;
-        if self.dates.is_empty() {
-            return Err("suggest at least one date first".into());
+        if self.slots.is_empty() {
+            return Err("suggest at least one time first".into());
         }
-        if !(1..=self.dates.len()).contains(&days) {
-            return Err(format!("you can look for 1 to {} days", self.dates.len()));
+        if !(1..=self.slots.len()).contains(&days) {
+            return Err(format!("you can look for 1 to {} times", self.slots.len()));
         }
         if !(1..=self.registered()).contains(&threshold) {
             return Err(DkgError::InvalidThreshold.to_string());
         }
         self.begin_ceremony(threshold, 0)?;
-        self.options = self.dates.iter().map(|d| d.date.clone()).collect();
+        self.options = self.slots.iter().map(|s| s.slot.clone()).collect();
         self.days = days;
         self.phase = Phase::KeyCeremony;
         Ok(())
@@ -547,11 +549,11 @@ impl Room {
                 true,
             ),
             Need::Vote { round: 1 } => (
-                "Voting is open. How well does each day work for you?".to_string(),
+                "Voting is open. How well does each time work for you?".to_string(),
                 false,
             ),
             Need::Vote { round } => (
-                format!("Day {round} of {days}: keep your vote, or update it."),
+                format!("Meeting {round} of {days}: keep your vote, or update it."),
                 false,
             ),
             Need::Decrypt { .. } => (
@@ -563,10 +565,11 @@ impl Room {
                     .rounds
                     .iter()
                     .filter_map(|r| r.winner)
-                    .map(|o| short_date(&self.options[o]))
+                    .filter_map(|o| Slot::parse(&self.options[o]))
+                    .map(|slot| slot.short())
                     .collect();
                 let body = if picked.is_empty() {
-                    "The result is in: no date works for everyone.".to_string()
+                    "The result is in: no time works for everyone.".to_string()
                 } else {
                     format!("The result is in: {}.", picked.join(", "))
                 };
@@ -634,7 +637,7 @@ impl Room {
             } else {
                 Vec::new()
             },
-            dates: self.dates.clone(),
+            slots: self.slots.clone(),
             ceremony: self.key.as_ref().map(|k| CeremonyView {
                 attempt: k.attempt,
                 threshold: k.threshold,
@@ -694,16 +697,24 @@ mod tests {
             .collect();
         // Each client registers its key on its own.
         settle(&mut room, &ids);
-        for date in ["2026-10-25", "2026-10-24", "2026-10-26"] {
-            let date = date.into();
-            room.apply(1, ClientMsg::SuggestDate { date }).unwrap();
+        for slot in [
+            "2026-10-25T18:00+02:00/120",
+            "2026-10-24T18:00+02:00/120",
+            "2026-10-26T18:00+02:00/120",
+        ] {
+            let slot = slot.into();
+            room.apply(1, ClientMsg::SuggestSlot { slot }).unwrap();
         }
         let start = ClientMsg::StartCeremony { threshold: 2, days };
         assert!(room.apply(1, start.clone()).is_err());
         room.apply(0, start).unwrap();
         assert_eq!(
             room.view(0).options,
-            ["2026-10-24", "2026-10-25", "2026-10-26"]
+            [
+                "2026-10-24T18:00+02:00/120",
+                "2026-10-25T18:00+02:00/120",
+                "2026-10-26T18:00+02:00/120",
+            ]
         );
 
         // ...and deals and checks shares, until the key is ready.
@@ -769,7 +780,7 @@ mod tests {
         let outcome = round_outcome(&v, round, None).unwrap();
         assert!(outcome.checks_out());
         assert_eq!(
-            outcome.winner.map(|p| p.date),
+            outcome.winner.map(|p| p.slot),
             r.winner.map(|o| v.options[o].clone())
         );
         (result, r.winner)
@@ -873,10 +884,10 @@ mod tests {
         let register = |id: &TrusteeIdentity| ClientMsg::Register(id.register("p1", &mut OsRng));
         room.apply(0, register(&alice)).unwrap();
         room.apply(1, register(&bob_chat_app)).unwrap();
-        let date = ClientMsg::SuggestDate {
-            date: "2026-10-24".into(),
+        let slot = ClientMsg::SuggestSlot {
+            slot: "2026-10-24T18:00+02:00/120".into(),
         };
-        room.apply(1, date).unwrap();
+        room.apply(1, slot).unwrap();
         let start = ClientMsg::StartCeremony {
             threshold: 2,
             days: 1,
@@ -957,12 +968,39 @@ mod tests {
         decrypt(&mut room, &ids, 2);
         let pushes = room.pushes();
         assert_eq!(pushes.len(), 1);
-        assert_eq!(pushes[0].1.body, "The result is in: Sun 25 Oct.");
+        assert_eq!(
+            pushes[0].1.body,
+            "The result is in: Sun 25 Oct, 18:00–20:00."
+        );
 
         // alice gets it too once she goes offline.
         room.set_online(0, false);
         let pushes = room.pushes();
         assert_eq!((pushes.len(), pushes[0].0[0].token.as_str()), (1, "a11ce"));
+    }
+
+    #[test]
+    fn slots_are_canonical_and_sorted_by_instant() {
+        let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
+        let suggest = |room: &mut Room, s: &str| {
+            room.apply(0, ClientMsg::SuggestSlot { slot: s.into() })
+                .unwrap()
+        };
+        // 19:00 at +02:00 is 17:00 UTC: before 18:30 at UTC.
+        suggest(&mut room, "2026-10-24T18:30Z/60");
+        suggest(&mut room, "2026-10-24T19:00+02:00/60");
+        // Same day, later time: a separate slot. A repeat is ignored.
+        suggest(&mut room, "2026-10-24T21:00+02:00/90");
+        suggest(&mut room, "2026-10-24T21:00+02:00/90");
+        let slots: Vec<String> = room.view(0).slots.into_iter().map(|s| s.slot).collect();
+        assert_eq!(
+            slots,
+            [
+                "2026-10-24T19:00+02:00/60",
+                "2026-10-24T18:30+00:00/60",
+                "2026-10-24T21:00+02:00/90",
+            ]
+        );
     }
 
     #[test]
@@ -974,9 +1012,11 @@ mod tests {
     #[test]
     fn bad_inputs_are_rejected() {
         let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
-        let date = |d: &str| ClientMsg::SuggestDate { date: d.into() };
+        let slot = |s: &str| ClientMsg::SuggestSlot { slot: s.into() };
         let start = |days| ClientMsg::StartCeremony { threshold: 1, days };
-        assert!(room.apply(0, date("tomorrow")).is_err());
+        assert!(room.apply(0, slot("tomorrow")).is_err());
+        assert!(room.apply(0, slot("2026-10-24")).is_err());
+        assert!(room.apply(0, slot("2026-10-24T18:00+02:00/5")).is_err());
         assert!(room
             .apply(0, ClientMsg::Invite { name: "  ".into() })
             .is_err());
@@ -989,15 +1029,15 @@ mod tests {
         let id = TrusteeIdentity::generate(&mut OsRng);
         let other = id.register("other", &mut OsRng);
         assert!(room.apply(1, ClientMsg::Register(other)).is_err());
-        // Can't start without dates or with no trustees.
+        // Can't start without slots or with no trustees.
         assert!(room.apply(0, start(1)).is_err());
-        room.apply(0, date("2026-10-24")).unwrap();
+        room.apply(0, slot("2026-10-24T18:00+02:00/120")).unwrap();
         assert!(room.apply(0, start(1)).is_err());
         // Can't register someone else's key.
         let reg = id.register("p1", &mut OsRng);
         room.apply(0, ClientMsg::Register(reg.clone())).unwrap();
         assert!(room.apply(1, ClientMsg::Register(reg)).is_err());
-        // More days than dates, or none.
+        // More picks than slots, or none.
         assert!(room.apply(0, start(2)).is_err());
         assert!(room.apply(0, start(0)).is_err());
         room.apply(0, start(1)).unwrap();

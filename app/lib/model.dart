@@ -98,9 +98,9 @@ class PollView {
           ((i as Map)['name'] as String, i['token'] as String)
       ];
 
-  /// Suggested dates, as (ISO date, suggested by).
-  List<(String, String)> get dates => [
-        for (final d in json['dates'] as List) ((d as Map)['date'] as String, d['by'] as String)
+  /// Suggested slots, earliest first, as (canonical slot text, suggested by).
+  List<(String, String)> get slots => [
+        for (final d in json['slots'] as List) ((d as Map)['slot'] as String, d['by'] as String)
       ];
 
   CeremonyInfo? get ceremony {

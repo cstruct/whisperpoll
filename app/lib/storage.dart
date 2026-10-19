@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart' show TimeOfDay;
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -59,6 +61,23 @@ class Invite {
         token: j['token'] as String,
         title: j['title'] as String?,
       );
+}
+
+/// The start time and duration last used when suggesting a slot.
+class SlotDefaults {
+  static Future<(TimeOfDay, int)> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hour = prefs.getInt('slot-hour') ?? 18;
+    final minute = prefs.getInt('slot-minute') ?? 0;
+    return (TimeOfDay(hour: hour, minute: minute), prefs.getInt('slot-minutes') ?? 120);
+  }
+
+  static Future<void> save(TimeOfDay time, int minutes) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('slot-hour', time.hour);
+    await prefs.setInt('slot-minute', time.minute);
+    await prefs.setInt('slot-minutes', minutes);
+  }
 }
 
 /// The polls this device has joined, newest first.
