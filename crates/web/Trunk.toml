@@ -1,3 +1,7 @@
 [build]
 target = "index.html"
 dist = "dist"
+
+[watch]
+# The client also compiles the core and protocol crates.
+watch = ["index.html", "style.css", "src", "../core/src", "../protocol/src"]

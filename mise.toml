@@ -10,9 +10,10 @@ run = [
 
 [tasks.start]
 description = "Start the server and a rebuilding web client in the background"
-depends = ["build"]
 run = '''
+# Stop first: a running watcher would race this build over crates/web/dist.
 mise run stop >/dev/null
+mise run build
 root=$PWD
 mkdir -p target/dev
 cd crates/web
