@@ -50,7 +50,12 @@ async fn main() {
         .fallback_service(static_files)
         .with_state(AppState::default());
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    // Local by default; containers set HOST=0.0.0.0.
+    let host: std::net::IpAddr = std::env::var("HOST")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or([127, 0, 0, 1].into());
+    let addr = SocketAddr::from((host, port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     println!("whisperpoll on http://{addr} (serving {})", dist.display());
     axum::serve(listener, app).await.unwrap();

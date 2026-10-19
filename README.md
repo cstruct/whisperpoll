@@ -38,6 +38,20 @@ cargo run -p whisperpoll-server
 To try a poll alone, open each invite link in its own tab. Keys are stored
 per invite, so one browser can play every participant.
 
+## Deploying to Fly.io
+
+The repo has a `Dockerfile` and `fly.toml`. `fly launch`'s source scanner
+can't handle the Cargo workspace, so create the app and deploy directly:
+
+```sh
+fly apps create <your-app-name>   # then set `app` in fly.toml to match
+fly deploy --ha=false
+```
+
+`--ha=false` keeps it to a single machine. Polls are kept in memory only, so
+a second machine would split polls between them, and every deploy or restart
+clears all polls.
+
 ## Tests
 
 ```sh
