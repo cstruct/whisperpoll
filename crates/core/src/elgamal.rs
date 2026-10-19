@@ -32,7 +32,10 @@ pub struct Ciphertext {
 impl SecretKey {
     pub fn generate(rng: &mut impl CryptoRngCore) -> Self {
         let x = Scalar::random(rng);
-        SecretKey { x, pk: PublicKey(RistrettoPoint::mul_base(&x)) }
+        SecretKey {
+            x,
+            pk: PublicKey(RistrettoPoint::mul_base(&x)),
+        }
     }
 
     pub fn public_key(&self) -> PublicKey {
@@ -75,7 +78,10 @@ impl PublicKey {
 impl Ciphertext {
     /// Encryption of zero with zero randomness: the identity for `+`.
     pub fn zero() -> Self {
-        Ciphertext { a: RistrettoPoint::identity(), b: RistrettoPoint::identity() }
+        Ciphertext {
+            a: RistrettoPoint::identity(),
+            b: RistrettoPoint::identity(),
+        }
     }
 
     pub fn to_bytes(&self) -> [u8; 64] {
@@ -89,7 +95,10 @@ impl Ciphertext {
 impl Add for Ciphertext {
     type Output = Ciphertext;
     fn add(self, rhs: Ciphertext) -> Ciphertext {
-        Ciphertext { a: self.a + rhs.a, b: self.b + rhs.b }
+        Ciphertext {
+            a: self.a + rhs.a,
+            b: self.b + rhs.b,
+        }
     }
 }
 
@@ -130,7 +139,10 @@ mod tests {
     fn addition_is_homomorphic() {
         let sk = SecretKey::generate(&mut OsRng);
         let pk = sk.public_key();
-        let total: Ciphertext = [3, 0, 1, 5].iter().map(|&m| pk.encrypt(m, &mut OsRng).0).sum();
+        let total: Ciphertext = [3, 0, 1, 5]
+            .iter()
+            .map(|&m| pk.encrypt(m, &mut OsRng).0)
+            .sum();
         assert_eq!(sk.decrypt(&total, 100), Some(9));
     }
 
