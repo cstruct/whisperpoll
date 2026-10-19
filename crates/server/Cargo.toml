@@ -8,7 +8,7 @@ description = "Websocket relay and bulletin board for whisperpoll"
 whisperpoll-core = { path = "../core" }
 whisperpoll-protocol = { path = "../protocol" }
 axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "process", "io-util"] }
 tower-http = { version = "0.6", features = ["fs"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 serde = { version = "1", features = ["derive"] }

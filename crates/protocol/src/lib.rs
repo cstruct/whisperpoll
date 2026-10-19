@@ -24,6 +24,7 @@
 //! works for anyone picks nothing and ends the poll.
 
 pub mod calendar;
+pub mod client;
 
 use serde::{Deserialize, Serialize};
 use whisperpoll_core::{
@@ -157,6 +158,18 @@ pub enum ClientMsg {
     KeepVote,
     CloseVoting,
     Partial(PartialDecryption),
+    /// A device that should get push notifications for this participant
+    /// when they're offline and needed.
+    RegisterDevice {
+        platform: PushPlatform,
+        token: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PushPlatform {
+    /// Apple's push service; `token` is the device token in hex.
+    Apns,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

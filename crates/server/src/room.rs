@@ -4,10 +4,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rand_core::{OsRng, RngCore};
+
+use crate::push::{Device, Push};
 use whisperpoll_core::{
     combine_tally, Ballot, BulletinBoard, Ceremony, Complaint, Dealing, DkgError,
     PartialDecryption, Poll, Receipt, Registration, TallyResult, TieredResult,
 };
+use whisperpoll_protocol::calendar::short_date;
 use whisperpoll_protocol::{
     is_iso_date, round_winner, CeremonyView, ClientMsg, DateSuggestion, InviteLink,
     ParticipantView, Phase, PollView, RoundView, BALLOT_KIND,
@@ -17,6 +20,18 @@ const MAX_NAME: usize = 40;
 const MAX_TITLE: usize = 100;
 const MAX_PARTICIPANTS: usize = 50;
 const MAX_DATES: usize = 30;
+const MAX_DEVICES: usize = 5;
+
+/// What a participant's device is needed for right now. A push goes out
+/// once per need, and only while they're offline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Need {
+    Deal { attempt: u32 },
+    Check { attempt: u32 },
+    Vote { round: usize },
+    Decrypt { round: usize },
+    Results,
+}
 
 struct Member {
     name: String,
@@ -24,6 +39,9 @@ struct Member {
     creator: bool,
     registration: Option<Registration>,
     online: usize,
+    devices: Vec<Device>,
+    /// The last need a push went out for.
+    notified: Option<Need>,
 }
 
 /// One round of voting and tallying, looking for one day.
@@ -106,6 +124,8 @@ impl Room {
                 creator: true,
                 registration: None,
                 online: 0,
+                devices: Vec::new(),
+                notified: None,
             }],
             dates: Vec::new(),
             key: None,
@@ -185,6 +205,18 @@ impl Room {
                 Ok(())
             }
             ClientMsg::Partial(p) => self.partial(who, p),
+            ClientMsg::RegisterDevice { platform, token } => {
+                if token.is_empty() || token.len() > 200 {
+                    return Err("invalid device token".into());
+                }
+                let devices = &mut self.members[who].devices;
+                devices.retain(|d| d.token != token);
+                devices.push(Device { platform, token });
+                if devices.len() > MAX_DEVICES {
+                    devices.remove(0);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -261,6 +293,8 @@ impl Room {
             creator: false,
             registration: None,
             online: 0,
+            devices: Vec::new(),
+            notified: None,
         });
         Ok(())
     }
@@ -474,6 +508,97 @@ impl Room {
         Ok(())
     }
 
+    fn need(&self, who: usize) -> Option<Need> {
+        let trustee = self.trustee_index(who).map(|j| j as usize - 1);
+        match self.phase {
+            Phase::KeyCeremony => {
+                let (k, j) = (self.key.as_ref()?, trustee?);
+                let attempt = k.attempt;
+                if k.dealings[j].is_none() {
+                    Some(Need::Deal { attempt })
+                } else if k.dealings.iter().all(Option::is_some) && k.complaints[j].is_none() {
+                    Some(Need::Check { attempt })
+                } else {
+                    None
+                }
+            }
+            Phase::Voting => {
+                let round = self.rounds.len();
+                (!self.rounds.last()?.confirmed.contains(&who)).then_some(Need::Vote { round })
+            }
+            Phase::Tallying => {
+                let j = trustee? as u32 + 1;
+                let round = self.rounds.last()?;
+                let done = round.partials.iter().any(|p| p.trustee == j);
+                (!done).then_some(Need::Decrypt {
+                    round: self.rounds.len(),
+                })
+            }
+            Phase::Done => Some(Need::Results),
+            _ => None,
+        }
+    }
+
+    fn push_for(&self, need: Need) -> Push {
+        let days = self.days;
+        let (body, wake) = match need {
+            Need::Deal { .. } | Need::Check { .. } => (
+                "Your phone is needed for a moment to set up the poll's key.".to_string(),
+                true,
+            ),
+            Need::Vote { round: 1 } => (
+                "Voting is open. How well does each day work for you?".to_string(),
+                false,
+            ),
+            Need::Vote { round } => (
+                format!("Day {round} of {days}: keep your vote, or update it."),
+                false,
+            ),
+            Need::Decrypt { .. } => (
+                "Your phone is needed for a moment to reveal the result.".to_string(),
+                true,
+            ),
+            Need::Results => {
+                let picked: Vec<String> = self
+                    .rounds
+                    .iter()
+                    .filter_map(|r| r.winner)
+                    .map(|o| short_date(&self.options[o]))
+                    .collect();
+                let body = if picked.is_empty() {
+                    "The result is in: no date works for everyone.".to_string()
+                } else {
+                    format!("The result is in: {}.", picked.join(", "))
+                };
+                (body, false)
+            }
+        };
+        Push {
+            poll: self.id.clone(),
+            title: self.title.clone(),
+            body,
+            wake,
+        }
+    }
+
+    /// Pushes now due: one per new need of each offline participant who has
+    /// a device. Call after every change, including someone going offline.
+    pub fn pushes(&mut self) -> Vec<(Vec<Device>, Push)> {
+        let mut due = Vec::new();
+        for who in 0..self.members.len() {
+            let Some(need) = self.need(who) else {
+                continue;
+            };
+            let m = &self.members[who];
+            if m.online > 0 || m.devices.is_empty() || m.notified == Some(need) {
+                continue;
+            }
+            due.push((m.devices.clone(), self.push_for(need)));
+            self.members[who].notified = Some(need);
+        }
+        due
+    }
+
     pub fn view(&self, who: usize) -> PollView {
         let creator = self.members[who].creator;
         PollView {
@@ -546,6 +671,7 @@ impl Room {
 mod tests {
     use super::*;
     use whisperpoll_core::{cast_tiered_ballot, partial_decrypt, verify_tally, TrusteeIdentity};
+    use whisperpoll_protocol::client::{next_step, round_outcome};
 
     const P: Option<usize> = Some(0);
     const OK: Option<usize> = Some(1);
@@ -566,10 +692,8 @@ mod tests {
         let ids: Vec<_> = (0..3)
             .map(|_| TrusteeIdentity::generate(&mut OsRng))
             .collect();
-        for (who, id) in ids.iter().enumerate() {
-            let reg = id.register("p1", &mut OsRng);
-            room.apply(who, ClientMsg::Register(reg)).unwrap();
-        }
+        // Each client registers its key on its own.
+        settle(&mut room, &ids);
         for date in ["2026-10-25", "2026-10-24", "2026-10-26"] {
             let date = date.into();
             room.apply(1, ClientMsg::SuggestDate { date }).unwrap();
@@ -582,25 +706,32 @@ mod tests {
             ["2026-10-24", "2026-10-25", "2026-10-26"]
         );
 
-        for (who, id) in ids.iter().enumerate() {
-            let c = room.view(who).ceremony().unwrap();
-            let dealing = c.deal(id, &mut OsRng).unwrap();
-            room.apply(who, ClientMsg::Deal(dealing)).unwrap();
-        }
-        for (who, id) in ids.iter().enumerate() {
-            let v = room.view(who);
-            let dealings = &v.ceremony.as_ref().unwrap().dealings;
-            let c = v.ceremony().unwrap();
-            let complaints = c.check_dealings(id, dealings, &mut OsRng).unwrap();
-            let attempt = v.ceremony.as_ref().unwrap().attempt;
-            let checked = ClientMsg::Checked {
-                attempt,
-                complaints,
-            };
-            room.apply(who, checked).unwrap();
-        }
+        // ...and deals and checks shares, until the key is ready.
+        settle(&mut room, &ids);
         assert_eq!(room.view(0).phase, Phase::Voting);
         (room, ids)
+    }
+
+    /// Runs every participant's automatic client steps (the shared
+    /// `next_step`, as the web and mobile clients do) until nobody has
+    /// anything left to send.
+    fn settle(room: &mut Room, ids: &[TrusteeIdentity]) {
+        let mut sent: Vec<HashSet<String>> = vec![HashSet::new(); ids.len()];
+        loop {
+            let mut progressed = false;
+            for (who, id) in ids.iter().enumerate() {
+                let view = room.view(who);
+                let step = next_step(&view, id, |k| sent[who].contains(k), &mut OsRng);
+                if let Some(step) = step {
+                    sent[who].insert(step.key);
+                    room.apply(who, step.msg).unwrap();
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
     }
 
     fn ballot(room: &Room, choices: &[Option<usize>]) -> Ballot {
@@ -634,6 +765,13 @@ mod tests {
         verify_tally(&board, tally).unwrap();
         let result = TieredResult::from_tally(&board.poll, tally).unwrap();
         assert_eq!(round_winner(&result, &v.picked_before(round)), r.winner);
+        // The shared client-side check agrees.
+        let outcome = round_outcome(&v, round, None).unwrap();
+        assert!(outcome.checks_out());
+        assert_eq!(
+            outcome.winner.map(|p| p.date),
+            r.winner.map(|o| v.options[o].clone())
+        );
         (result, r.winner)
     }
 
@@ -785,6 +923,46 @@ mod tests {
 
         // Once voting is open, keys are fixed.
         assert!(room.apply(1, register(&bob_chat_app)).is_err());
+    }
+
+    #[test]
+    fn pushes_go_to_offline_participants_once_per_need() {
+        let (mut room, ids) = setup(1);
+        let device = |token: &str| ClientMsg::RegisterDevice {
+            platform: whisperpoll_protocol::PushPlatform::Apns,
+            token: token.into(),
+        };
+        // bob is offline with a phone; alice has one too but is online;
+        // carol has none.
+        room.apply(1, device("b0b")).unwrap();
+        room.apply(0, device("a11ce")).unwrap();
+        room.set_online(0, true);
+
+        let pushes = room.pushes();
+        assert_eq!(pushes.len(), 1);
+        let (devices, push) = &pushes[0];
+        assert_eq!(devices[0].token, "b0b");
+        assert!(push.body.contains("Voting is open") && !push.wake);
+        assert!(room.pushes().is_empty(), "one push per need");
+
+        for (who, choices) in [[P, OK, X], [X, P, P], [IN, P, OK]].iter().enumerate() {
+            vote(&mut room, who, choices);
+        }
+        // Revealing the result needs bob's phone: wake it.
+        let pushes = room.pushes();
+        assert_eq!(pushes.len(), 1);
+        assert!(pushes[0].1.wake && pushes[0].1.body.contains("reveal"));
+
+        decrypt(&mut room, &ids, 0);
+        decrypt(&mut room, &ids, 2);
+        let pushes = room.pushes();
+        assert_eq!(pushes.len(), 1);
+        assert_eq!(pushes[0].1.body, "The result is in: Sun 25 Oct.");
+
+        // alice gets it too once she goes offline.
+        room.set_online(0, false);
+        let pushes = room.pushes();
+        assert_eq!((pushes.len(), pushes[0].0[0].token.as_str()), (1, "a11ce"));
     }
 
     #[test]

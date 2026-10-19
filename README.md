@@ -38,6 +38,33 @@ cargo run -p whisperpoll-server
 To try a poll alone, open each invite link in its own tab. Keys are stored
 per invite, so one browser can play every participant.
 
+## iOS app
+
+`app/` is a Flutter app with the same flow as the web client. Its
+cryptography is the same Rust code (`crates/core`, `crates/protocol`), called
+through [flutter_rust_bridge](https://cjycode.com/flutter_rust_bridge/) from
+`app/rust`. Invite links work in both: open the web link in the app's "Join"
+field, or use `whisperpoll://p/<poll>?t=<token>&server=<https://host>`.
+
+```sh
+cd app
+flutter run                              # on a booted iOS simulator
+flutter_rust_bridge_codegen generate     # after changing app/rust/src/api
+```
+
+Push notifications: the server pushes to participants who are offline when
+they're needed (to vote, or for their phone to do its key or decryption step,
+which wakes the app in the background). Without a paid Apple developer
+account there is no real push, but the simulator can be driven locally:
+
+```sh
+WHISPERPOLL_PUSH=simulator:dev.whisperpoll.whisperpoll mise run start
+```
+
+With that, the server delivers pushes to the booted simulator with
+`xcrun simctl push` instead of logging them. Real delivery needs an APNs key
+and the app's push entitlement.
+
 ## Deploying to Fly.io
 
 The repo has a `Dockerfile` and `fly.toml`. `fly launch`'s source scanner

@@ -2,11 +2,12 @@
 name = "whisperpoll-protocol"
 version = "0.1.0"
 edition = "2021"
-description = "Messages between the whisperpoll server and browser clients"
+description = "Messages between the whisperpoll server and its clients, and the logic clients share"
 
 [dependencies]
 whisperpoll-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
+rand_core = "0.6"
 
 [dev-dependencies]
 serde_json = "1"

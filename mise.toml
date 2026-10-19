@@ -1,5 +1,7 @@
 [tools]
 "github:trunk-rs/trunk" = "0.21.14"
+flutter = "3.47.7"
+"cargo:flutter_rust_bridge_codegen" = "2.13.0"
 
 [tasks.build]
 description = "Build the web client and the server"

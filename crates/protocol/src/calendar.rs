@@ -19,6 +19,23 @@ fn parse(date: &str) -> Option<(u32, u32, u32)> {
     ))
 }
 
+/// `2026-10-25` → `Sun 25 Oct`, for texts the server writes (like push
+/// notifications); clients format dates in the viewer's locale instead.
+pub fn short_date(date: &str) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let Some((y, m, d)) = parse(date) else {
+        return date.to_string();
+    };
+    // Sakamoto's day-of-week method.
+    const OFFSETS: [u32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y_ = if m < 3 { y - 1 } else { y };
+    let weekday = (y_ + y_ / 4 - y_ / 100 + y_ / 400 + OFFSETS[m as usize - 1] + d) % 7;
+    format!("{} {d} {}", DAYS[weekday as usize], MONTHS[m as usize - 1])
+}
+
 fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         2 if (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400) => {
@@ -193,6 +210,14 @@ mod tests {
         }
         let unfolded = cal.replace("\r\n ", "");
         assert!(unfolded.contains(&format!("SUMMARY:{title}")));
+    }
+
+    #[test]
+    fn short_dates_have_the_right_weekday() {
+        assert_eq!(short_date("2026-10-25"), "Sun 25 Oct");
+        assert_eq!(short_date("2024-02-29"), "Thu 29 Feb");
+        assert_eq!(short_date("2000-01-01"), "Sat 1 Jan");
+        assert_eq!(short_date("nonsense"), "nonsense");
     }
 
     #[test]

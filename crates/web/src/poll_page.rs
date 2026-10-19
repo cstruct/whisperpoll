@@ -4,9 +4,10 @@ use leptos::ev::SubmitEvent;
 use leptos::prelude::*;
 use rand_core::OsRng;
 use web_sys::HtmlInputElement;
-use whisperpoll_core::{cast_tiered_ballot, verify_tally, TieredResult};
+use whisperpoll_core::cast_tiered_ballot;
 use whisperpoll_protocol::calendar::{self, Event};
-use whisperpoll_protocol::{round_winner, ClientMsg, Phase, PollView, TIERS};
+use whisperpoll_protocol::client::{finished_outcomes, Outcome};
+use whisperpoll_protocol::{ClientMsg, Phase, PollView, TIERS};
 
 use crate::net::{self, Conn};
 use crate::{auto, store, util};
@@ -883,60 +884,6 @@ fn Tallying() -> impl IntoView {
     }
 }
 
-/// One finished round, as re-derived and checked in this browser.
-#[derive(Clone, PartialEq)]
-struct Outcome {
-    /// (date, per-tier counts, can come, score, picked in an earlier round), best first.
-    rows: Vec<(String, Vec<u64>, u64, u64, bool)>,
-    ballots: u64,
-    winner: Option<(String, u64)>,
-    verified: Result<(), String>,
-    winner_checks_out: bool,
-    decrypted_by: Vec<String>,
-    mine: Option<bool>,
-}
-
-fn outcome(v: &PollView, id: &str, token: &str, round: usize) -> Option<Outcome> {
-    let r = v.rounds.get(round.checked_sub(1)?)?;
-    let tally = r.tally.as_ref()?;
-    let board = v.board_for(round)?;
-    let verified = verify_tally(&board, tally).map_err(|e| e.to_string());
-    let result = TieredResult::from_tally(&board.poll, tally).ok()?;
-    let before = v.picked_before(round);
-    let cv = v.ceremony.as_ref()?;
-    Some(Outcome {
-        rows: result
-            .order()
-            .into_iter()
-            .map(|o| {
-                (
-                    v.options[o].clone(),
-                    result.counts[o].clone(),
-                    result.available[o],
-                    result.score[o],
-                    before.contains(&o),
-                )
-            })
-            .collect(),
-        ballots: tally.ballots,
-        winner: r
-            .winner
-            .map(|o| (v.options[o].clone(), result.available[o])),
-        verified,
-        winner_checks_out: round_winner(&result, &before) == r.winner,
-        decrypted_by: tally
-            .partials
-            .iter()
-            .map(|p| {
-                v.participants[cv.trustees[p.trustee as usize - 1]]
-                    .name
-                    .clone()
-            })
-            .collect(),
-        mine: store::receipt_for(id, token, round).map(|rc| board.contains(&rc)),
-    })
-}
-
 /// Outcomes of every finished round, recomputed when the state changes.
 fn finished_rounds() -> Memo<Vec<Outcome>> {
     let s = session();
@@ -944,11 +891,7 @@ fn finished_rounds() -> Memo<Vec<Outcome>> {
     let ids = StoredValue::new((s.id, s.token));
     Memo::new(move |_| {
         read(conn, Vec::new(), |v| {
-            ids.with_value(|(id, token)| {
-                (1..=v.rounds.len())
-                    .map_while(|r| outcome(v, id, token, r))
-                    .collect()
-            })
+            ids.with_value(|(id, token)| finished_outcomes(v, |r| store::receipt_for(id, token, r)))
         })
     })
 }
@@ -957,11 +900,11 @@ fn finished_rounds() -> Memo<Vec<Outcome>> {
 fn RoundDetails(outcome: Outcome, round: usize, days: usize, open: bool) -> impl IntoView {
     let o = outcome;
     let title = match (&o.winner, days) {
-        (Some((date, _)), 1) => format!("Result: {}", util::pretty_date(date)),
-        (Some((date, _)), _) => format!("Day {round}: {}", util::pretty_date(date)),
+        (Some(pick), 1) => format!("Result: {}", util::pretty_date(&pick.date)),
+        (Some(pick), _) => format!("Day {round}: {}", util::pretty_date(&pick.date)),
         (None, _) => format!("Day {round}: no date found"),
     };
-    let checks_out = o.verified.is_ok() && o.winner_checks_out;
+    let checks_out = o.checks_out();
     view! {
         <details class="card round" open=open>
             <summary>
@@ -981,15 +924,15 @@ fn RoundDetails(outcome: Outcome, round: usize, days: usize, open: bool) -> impl
                         </tr>
                     </thead>
                     <tbody>
-                        {o.rows.iter().map(|(date, counts, available, score, earlier)| view! {
-                            <tr class:earlier=*earlier>
+                        {o.rows.iter().map(|row| view! {
+                            <tr class:earlier=row.picked_earlier>
                                 <th>
-                                    {util::pretty_date(date)}
-                                    {earlier.then_some(view! { <span class="tag">"picked"</span> })}
+                                    {util::pretty_date(&row.date)}
+                                    {row.picked_earlier.then_some(view! { <span class="tag">"picked"</span> })}
                                 </th>
-                                {counts.iter().map(|c| view! { <td>{*c}</td> }).collect_view()}
-                                <td>{*available}</td>
-                                <td>{*score}</td>
+                                {row.counts.iter().map(|c| view! { <td>{*c}</td> }).collect_view()}
+                                <td>{row.available}</td>
+                                <td>{row.score}</td>
                             </tr>
                         }).collect_view()}
                     </tbody>
@@ -998,15 +941,15 @@ fn RoundDetails(outcome: Outcome, round: usize, days: usize, open: bool) -> impl
                     "Days are ranked by how many can come, then by preference (3 / 2 / 1 points)."
                     {(round > 1).then_some(" Days picked in earlier rounds can't win again.")}
                 </p>
-                {match &o.verified {
-                    Ok(()) => view! {
+                {match &o.verification_error {
+                    None => view! {
                         <p class="ok">{format!(
                             "✓ Checked in your browser: all {} ballots are valid, and the totals are exactly what the decryption proofs from {} show.",
                             o.ballots,
                             o.decrypted_by.join(" and "),
                         )}</p>
                     }.into_any(),
-                    Err(e) => view! { <p class="error">{format!("✗ Verification failed: {e}")}</p> }.into_any(),
+                    Some(e) => view! { <p class="error">{format!("✗ Verification failed: {e}")}</p> }.into_any(),
                 }}
                 {(!o.winner_checks_out).then(|| view! {
                     <p class="error">"✗ The server's pick for this round doesn't match these totals!"</p>
@@ -1051,12 +994,12 @@ fn CalendarExport(outcomes: Vec<Outcome>) -> impl IntoView {
     let picks: Vec<(String, String)> = outcomes
         .iter()
         .filter_map(|o| {
-            let (date, available) = o.winner.as_ref()?;
+            let pick = o.winner.as_ref()?;
             let note = format!(
-                "{available} of {} can make it. Picked with whisperpoll.",
-                o.ballots
+                "{} of {} can make it. Picked with whisperpoll.",
+                pick.available, o.ballots
             );
-            Some((date.clone(), note))
+            Some((pick.date.clone(), note))
         })
         .collect();
     if picks.is_empty() {
@@ -1128,11 +1071,11 @@ fn Results() -> impl IntoView {
         }
         let summary = if days == 1 {
             match &outcomes[0].winner {
-                Some((date, available)) => view! {
+                Some(pick) => view! {
                     <div class="card winner">
                         <span class="muted">"Best day"</span>
-                        <h2>{util::pretty_date(date)}</h2>
-                        <p>{format!("{available} of {} can make it", outcomes[0].ballots)}</p>
+                        <h2>{util::pretty_date(&pick.date)}</h2>
+                        <p>{format!("{} of {} can make it", pick.available, outcomes[0].ballots)}</p>
                         <CalendarExport outcomes=outcomes.clone() />
                     </div>
                 }
@@ -1156,10 +1099,10 @@ fn Results() -> impl IntoView {
                         {outcomes
                             .iter()
                             .map(|o| match &o.winner {
-                                Some((date, available)) => view! {
+                                Some(pick) => view! {
                                     <li>
-                                        <strong>{util::pretty_date(date)}</strong>
-                                        <span class="muted">{format!(" — {available} of {} can make it", o.ballots)}</span>
+                                        <strong>{util::pretty_date(&pick.date)}</strong>
+                                        <span class="muted">{format!(" — {} of {} can make it", pick.available, o.ballots)}</span>
                                     </li>
                                 }
                                 .into_any(),

@@ -1,6 +1,7 @@
 //! whisperpoll server: serves the web client and relays poll messages over
 //! websockets. State is in memory only.
 
+mod push;
 mod room;
 
 use std::collections::HashMap;
@@ -28,9 +29,10 @@ struct Entry {
     changed: broadcast::Sender<()>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct AppState {
     polls: Arc<Mutex<HashMap<String, Entry>>>,
+    notifier: Arc<dyn push::Notifier>,
 }
 
 #[tokio::main]
@@ -49,7 +51,10 @@ async fn main() {
         .route("/api/polls/{id}/check", get(check))
         .route("/ws/{id}", get(connect))
         .fallback_service(static_files)
-        .with_state(AppState::default());
+        .with_state(AppState {
+            polls: Arc::default(),
+            notifier: push::from_env(),
+        });
 
     // Local by default; containers set HOST=0.0.0.0.
     let host: std::net::IpAddr = std::env::var("HOST")
@@ -145,7 +150,14 @@ async fn session(socket: WebSocket, state: AppState, id: String, who: usize) {
                     Some(Ok(_)) => continue,
                 };
                 let result = match serde_json::from_str::<ClientMsg>(&text) {
-                    Ok(msg) => with_room(&state, &id, |r| r.apply(who, msg)).map(|(r, _)| r),
+                    Ok(msg) => with_room(&state, &id, |r| {
+                        let result = r.apply(who, msg);
+                        (result, r.pushes())
+                    })
+                    .map(|((result, pushes), _)| {
+                        send_pushes(&state, pushes);
+                        result
+                    }),
                     Err(e) => Some(Err(format!("malformed message: {e}"))),
                 };
                 match result {
@@ -164,7 +176,19 @@ async fn session(socket: WebSocket, state: AppState, id: String, who: usize) {
         }
     }
 
-    if with_room(&state, &id, |r| r.set_online(who, false)).is_some() {
+    let gone = with_room(&state, &id, |r| {
+        r.set_online(who, false);
+        r.pushes()
+    });
+    if let Some((pushes, _)) = gone {
+        // They may have left with something to do: that's what pushes are for.
+        send_pushes(&state, pushes);
         let _ = changed.send(());
+    }
+}
+
+fn send_pushes(state: &AppState, pushes: Vec<(Vec<push::Device>, push::Push)>) {
+    for (devices, push) in pushes {
+        state.notifier.send(&devices, &push);
     }
 }
