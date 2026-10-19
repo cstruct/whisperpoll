@@ -36,7 +36,7 @@ fn tiered_tally_gives_availability_and_preference() {
         submit(&mut board, &[CANT, CANT, OK]), // partial ballot
     ];
 
-    let tally = decrypt_tally(&sk, &board, &mut OsRng);
+    let tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     verify_tally(&board, &tally).unwrap();
     assert!(receipts.iter().all(|r| board.contains(r)));
 
@@ -58,7 +58,7 @@ fn availability_outranks_preference() {
     submit(&mut board, &[PREFER, IF_NEEDED, CANT]);
     submit(&mut board, &[PREFER, IF_NEEDED, CANT]);
     submit(&mut board, &[CANT, IF_NEEDED, CANT]);
-    let tally = decrypt_tally(&sk, &board, &mut OsRng);
+    let tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     let result = TieredResult::from_tally(&board.poll, &tally).unwrap();
     // Fri is everyone's favourite that can come, but only Sat works for all three.
     assert_eq!(result.score[0], 6);
@@ -70,7 +70,7 @@ fn availability_outranks_preference() {
 fn empty_ballot_is_valid_and_counts_nothing() {
     let (sk, mut board) = setup();
     submit(&mut board, &[CANT, CANT, CANT]);
-    let tally = decrypt_tally(&sk, &board, &mut OsRng);
+    let tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     verify_tally(&board, &tally).unwrap();
     assert!(tally.counts.iter().all(|&c| c == 0));
 }
@@ -107,7 +107,7 @@ fn wrong_kind_of_sum_proof_is_rejected() {
         "team-dinner",
         board.poll.options.clone(),
         BallotKind::Ranked,
-        board.poll.public_key,
+        board.poll.key.public_key,
     );
     let r = cast_ranked_ballot(&ranked, &[0, 1, 2], &mut OsRng).unwrap();
     let mut ballot = cast_tiered_ballot(&board.poll, &[PREFER, OK, OK], &mut OsRng).unwrap();
@@ -123,7 +123,29 @@ fn lying_about_a_tier_count_is_detected() {
     let (sk, mut board) = setup();
     submit(&mut board, &[PREFER, OK, CANT]);
     submit(&mut board, &[CANT, PREFER, IF_NEEDED]);
-    let mut tally = decrypt_tally(&sk, &board, &mut OsRng);
+    let mut tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     tally.counts[0] += 1;
     assert!(verify_tally(&board, &tally).is_err());
+}
+
+#[test]
+fn winner_is_the_top_of_the_order() {
+    let (sk, mut board) = setup();
+    submit(&mut board, &[PREFER, CANT, CANT]);
+    submit(&mut board, &[CANT, CANT, OK]);
+    let tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
+    let result = TieredResult::from_tally(&board.poll, &tally).unwrap();
+    assert_eq!(result.order(), vec![0, 2, 1]);
+    assert_eq!(result.winner(), Some(0));
+}
+
+#[test]
+fn misreporting_the_ballot_count_is_detected() {
+    let (sk, mut board) = setup();
+    submit(&mut board, &[PREFER, OK, CANT]);
+    submit(&mut board, &[OK, PREFER, PREFER]);
+    // Turnout is part of the result: "2 of 2 can make Sat" must not become "of 1".
+    let mut tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
+    tally.ballots = 1;
+    assert_eq!(verify_tally(&board, &tally), Err(Error::WrongBallotCount));
 }

@@ -23,7 +23,7 @@ fn ranked_tally_gives_positions_and_borda() {
         })
         .collect();
 
-    let tally = decrypt_tally(&sk, &board, &mut OsRng);
+    let tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     verify_tally(&board, &tally).unwrap();
     assert!(receipts.iter().all(|r| board.contains(r)));
 
@@ -95,7 +95,7 @@ fn lying_about_a_position_count_is_detected() {
             .submit(cast_ranked_ballot(&board.poll, &r, &mut OsRng).unwrap())
             .unwrap();
     }
-    let mut tally = decrypt_tally(&sk, &board, &mut OsRng);
+    let mut tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     tally.counts.swap(0, 1);
     assert!(verify_tally(&board, &tally).is_err());
 }

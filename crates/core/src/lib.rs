@@ -1,6 +1,6 @@
 //! Core cryptography for whisperpoll: verifiable, anonymous date polls.
 //!
-//! Two ballot kinds are supported:
+//! Three ballot kinds are supported:
 //!
 //! * **Approval** — mark which days work. One exponential-ElGamal ciphertext
 //!   per day encrypting `1` (yes) or `0` (no), each with a zero-knowledge proof
@@ -18,23 +18,33 @@
 //! without decrypting a single individual ballot. Only that aggregate is
 //! decrypted, together with a proof of correct decryption.
 //!
+//! No single party has to hold the decryption key. Trustees (e.g. the poll
+//! creator and participants) run a [`Ceremony`] — a dealerless distributed
+//! key generation — and any `t` of the `n` trustees can then jointly decrypt
+//! the tally with [`partial_decrypt`] and [`combine_tally`]. A single
+//! [`SecretKey`] still works as the 1-of-1 case via [`decrypt_tally`].
+//!
 //! Verifiability: a voter keeps the receipt (hash) of their ballot, checks it
 //! appears on the public bulletin board, and re-runs [`verify_tally`] — which
 //! re-derives the aggregate from every ballot on the board and checks the
-//! decryption proofs. If it passes, their vote is counted in the result.
+//! trustees' partial-decryption proofs. If it passes, their vote is counted in the result.
 
+mod dkg;
 mod elgamal;
 mod poll;
 mod proofs;
 mod ranked;
+mod threshold;
 mod tiered;
 mod transcript;
 
+pub use dkg::{Ceremony, Complaint, Dealing, DkgError, Registration, TrusteeIdentity};
 pub use elgamal::{Ciphertext, PublicKey, SecretKey};
 pub use poll::{
-    cast_ballot, decrypt_tally, verify_tally, Ballot, BallotKind, BulletinBoard, EncryptedChoice,
-    Error, Poll, Receipt, SumProof, TallyResult,
+    cast_ballot, combine_tally, decrypt_tally, verify_tally, Ballot, BallotKind, BulletinBoard,
+    EncryptedChoice, Error, Poll, Receipt, SumProof, TallyResult,
 };
-pub use proofs::{BitProof, DecryptionProof, ValueProof};
+pub use proofs::{BitProof, DleqProof, SchnorrProof, ValueProof};
 pub use ranked::{cast_ranked_ballot, RankedResult};
+pub use threshold::{partial_decrypt, KeyShare, PartialDecryption, TallyKey};
 pub use tiered::{cast_tiered_ballot, TieredResult};

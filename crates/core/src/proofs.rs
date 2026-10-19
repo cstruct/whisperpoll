@@ -3,9 +3,13 @@
 //! * [`BitProof`]: a ciphertext encrypts 0 or 1, without revealing which
 //!   (disjunctive Chaum–Pedersen, as in Helios). Stops a voter from casting
 //!   `Enc(100)` and stuffing the tally.
-//! * [`DecryptionProof`]: a claimed plaintext `M` is the correct decryption
-//!   of a ciphertext under the poll key (Chaum–Pedersen equality of discrete
-//!   logs). Stops the key holder from lying about the result.
+//! * [`ValueProof`]: a ciphertext (typically a homomorphic sum) encrypts a
+//!   known value. Used for ranked ballots' row/column sums.
+//! * [`DleqProof`]: two points share a discrete log (Chaum–Pedersen). Stops a
+//!   trustee from lying about their partial decryption, and lets a DKG
+//!   complaint reveal a Diffie–Hellman value verifiably.
+//! * [`SchnorrProof`]: knowledge of a secret key, bound to a message — i.e.
+//!   a Schnorr signature. Authenticates trustee registrations and dealings.
 //!
 //! Proofs are stored in compact `(challenge, response)` form; the verifier
 //! recomputes the prover's commitments and checks they hash to the challenge.
@@ -15,7 +19,7 @@ use curve25519_dalek::{
 };
 use rand_core::CryptoRngCore;
 
-use crate::elgamal::{Ciphertext, PublicKey, SecretKey};
+use crate::elgamal::{Ciphertext, PublicKey};
 use crate::transcript::Transcript;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,8 +37,16 @@ pub struct ValueProof {
     z: Scalar,
 }
 
+/// Proves `log_G(X) == log_P(Y)` for public `X`, `P`, `Y`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DecryptionProof {
+pub struct DleqProof {
+    c: Scalar,
+    z: Scalar,
+}
+
+/// Proves knowledge of `x` with `X = x·G`, bound to a context/message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SchnorrProof {
     c: Scalar,
     z: Scalar,
 }
@@ -159,66 +171,87 @@ impl ValueProof {
     }
 }
 
-fn decryption_challenge(
-    pk: &PublicKey,
-    ct: &Ciphertext,
-    plaintext: &RistrettoPoint,
+fn dleq_challenge(
+    x: &RistrettoPoint,
+    p: &RistrettoPoint,
+    y: &RistrettoPoint,
     ctx: &[u8],
     t1: &RistrettoPoint,
     t2: &RistrettoPoint,
 ) -> Scalar {
-    let mut t = Transcript::new(b"decryption-proof");
+    let mut t = Transcript::new(b"dleq-proof");
     t.append_bytes(b"ctx", ctx);
-    t.append_point(b"pk", &pk.0);
-    t.append_point(b"a", &ct.a);
-    t.append_point(b"b", &ct.b);
-    t.append_point(b"plaintext", plaintext);
+    t.append_point(b"x", x);
+    t.append_point(b"p", p);
+    t.append_point(b"y", y);
     t.append_point(b"t1", t1);
     t.append_point(b"t2", t2);
     t.challenge()
 }
 
-impl DecryptionProof {
-    /// Decrypts `ct` to `M = m·G` and proves `log_G(H) == log_A(B − M)`,
-    /// i.e. the same secret key was used for the public key and the decryption.
-    pub fn prove(
-        sk: &SecretKey,
-        ct: &Ciphertext,
+impl DleqProof {
+    /// Proves `secret·G` and `secret·p` share the discrete log `secret`.
+    pub(crate) fn prove(
+        secret: &Scalar,
+        p: &RistrettoPoint,
         ctx: &[u8],
         rng: &mut impl CryptoRngCore,
-    ) -> (RistrettoPoint, Self) {
-        let pk = sk.public_key();
-        let plaintext = sk.decrypt_to_point(ct);
+    ) -> Self {
+        let x = RistrettoPoint::mul_base(secret);
+        let y = secret * p;
         let w = Scalar::random(rng);
         let t1 = RistrettoPoint::mul_base(&w);
-        let t2 = w * ct.a;
-        let c = decryption_challenge(&pk, ct, &plaintext, ctx, &t1, &t2);
-        (
-            plaintext,
-            DecryptionProof {
-                c,
-                z: w + c * sk.scalar(),
-            },
-        )
+        let t2 = w * p;
+        let c = dleq_challenge(&x, p, &y, ctx, &t1, &t2);
+        DleqProof {
+            c,
+            z: w + c * secret,
+        }
     }
 
-    pub fn verify(
+    pub(crate) fn verify(
         &self,
-        pk: &PublicKey,
-        ct: &Ciphertext,
-        plaintext: &RistrettoPoint,
+        x: &RistrettoPoint,
+        p: &RistrettoPoint,
+        y: &RistrettoPoint,
         ctx: &[u8],
     ) -> bool {
-        let d = ct.b - plaintext;
-        let t1 = RistrettoPoint::mul_base(&self.z) - self.c * pk.0;
-        let t2 = self.z * ct.a - self.c * d;
-        self.c == decryption_challenge(pk, ct, plaintext, ctx, &t1, &t2)
+        let t1 = RistrettoPoint::mul_base(&self.z) - self.c * x;
+        let t2 = self.z * p - self.c * y;
+        self.c == dleq_challenge(x, p, y, ctx, &t1, &t2)
+    }
+}
+
+fn schnorr_challenge(x: &RistrettoPoint, ctx: &[u8], t: &RistrettoPoint) -> Scalar {
+    let mut tr = Transcript::new(b"schnorr-proof");
+    tr.append_bytes(b"ctx", ctx);
+    tr.append_point(b"x", x);
+    tr.append_point(b"t", t);
+    tr.challenge()
+}
+
+impl SchnorrProof {
+    pub(crate) fn prove(secret: &Scalar, ctx: &[u8], rng: &mut impl CryptoRngCore) -> Self {
+        let x = RistrettoPoint::mul_base(secret);
+        let w = Scalar::random(rng);
+        let t = RistrettoPoint::mul_base(&w);
+        let c = schnorr_challenge(&x, ctx, &t);
+        SchnorrProof {
+            c,
+            z: w + c * secret,
+        }
+    }
+
+    pub(crate) fn verify(&self, x: &RistrettoPoint, ctx: &[u8]) -> bool {
+        let t = RistrettoPoint::mul_base(&self.z) - self.c * x;
+        self.c == schnorr_challenge(x, ctx, &t)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::elgamal::SecretKey;
     use rand_core::OsRng;
 
     #[test]
@@ -269,12 +302,23 @@ mod tests {
     }
 
     #[test]
-    fn decryption_proof_rejects_wrong_plaintext() {
-        let sk = SecretKey::generate(&mut OsRng);
-        let pk = sk.public_key();
-        let (ct, _) = pk.encrypt(5, &mut OsRng);
-        let (m, proof) = DecryptionProof::prove(&sk, &ct, b"ctx", &mut OsRng);
-        assert!(proof.verify(&pk, &ct, &m, b"ctx"));
-        assert!(!proof.verify(&pk, &ct, &(m + G), b"ctx"));
+    fn dleq_proof_checks_equal_discrete_logs() {
+        let secret = Scalar::random(&mut OsRng);
+        let p = RistrettoPoint::mul_base(&Scalar::random(&mut OsRng));
+        let (x, y) = (RistrettoPoint::mul_base(&secret), secret * p);
+        let proof = DleqProof::prove(&secret, &p, b"ctx", &mut OsRng);
+        assert!(proof.verify(&x, &p, &y, b"ctx"));
+        assert!(!proof.verify(&x, &p, &(y + G), b"ctx"));
+        assert!(!proof.verify(&x, &p, &y, b"other"));
+    }
+
+    #[test]
+    fn schnorr_proof_is_bound_to_key_and_message() {
+        let secret = Scalar::random(&mut OsRng);
+        let x = RistrettoPoint::mul_base(&secret);
+        let proof = SchnorrProof::prove(&secret, b"msg", &mut OsRng);
+        assert!(proof.verify(&x, b"msg"));
+        assert!(!proof.verify(&x, b"other"));
+        assert!(!proof.verify(&(x + G), b"msg"));
     }
 }

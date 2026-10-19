@@ -30,7 +30,7 @@ pub fn cast_tiered_ballot(
     choices: &[Option<usize>],
     rng: &mut impl CryptoRngCore,
 ) -> Result<Ballot, Error> {
-    let BallotKind::Tiered { tiers } = poll.kind else {
+    let BallotKind::Tiered { tiers, .. } = poll.kind else {
         return Err(Error::WrongBallotKind);
     };
     if tiers == 0 {
@@ -59,7 +59,7 @@ pub fn cast_tiered_ballot(
             let available = choices[option].is_some();
             let ctx = poll.context(b"row", option);
             SumProof::ZeroOrOne(BitProof::prove(
-                &poll.public_key,
+                &poll.key.public_key,
                 &ct,
                 available,
                 &r,
@@ -85,7 +85,7 @@ pub(crate) fn verify_rows(poll: &Poll, tiers: usize, ballot: &Ballot) -> Result<
     for (option, proof) in ballot.sum_proofs.iter().enumerate() {
         let ct = sum_cells(&ballot.choices, row(tiers, option));
         let ctx = poll.context(b"row", option);
-        if !matches!(proof, SumProof::ZeroOrOne(p) if p.verify(&poll.public_key, &ct, &ctx)) {
+        if !matches!(proof, SumProof::ZeroOrOne(p) if p.verify(&poll.key.public_key, &ct, &ctx)) {
             return Err(Error::InvalidRowProof { option });
         }
     }
@@ -143,5 +143,10 @@ impl TieredResult {
         let mut order: Vec<usize> = (0..self.available.len()).collect();
         order.sort_by_key(|&o| Reverse((self.available[o], self.score[o])));
         order
+    }
+
+    /// The best option (`None` only for a poll with no options).
+    pub fn winner(&self) -> Option<usize> {
+        self.order().first().copied()
     }
 }

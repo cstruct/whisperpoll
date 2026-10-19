@@ -13,6 +13,8 @@ fn main() {
     ranked_poll();
     println!("\n────────────────────────────\n");
     tiered_poll();
+    println!("\n────────────────────────────\n");
+    trustee_poll();
 }
 
 fn approval_poll() {
@@ -44,7 +46,7 @@ fn approval_poll() {
         receipts.push(receipt);
     }
 
-    let result = decrypt_tally(&sk, &board, &mut OsRng);
+    let result = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     println!();
     for (day, count) in board.poll.options.iter().zip(&result.counts) {
         println!("{day}: {count} {}", "█".repeat(*count as usize));
@@ -90,7 +92,7 @@ fn ranked_poll() {
         );
     }
 
-    let tally = decrypt_tally(&sk, &board, &mut OsRng);
+    let tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     match verify_tally(&board, &tally) {
         Ok(()) => println!(
             "tally verified against all {} ballots\n",
@@ -137,7 +139,7 @@ fn tiered_poll() {
         );
     }
 
-    let tally = decrypt_tally(&sk, &board, &mut OsRng);
+    let tally = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     match verify_tally(&board, &tally) {
         Ok(()) => println!(
             "tally verified against all {} ballots\n",
@@ -157,5 +159,75 @@ fn tiered_poll() {
             "{:<12} {:>6} {:>3} {:>9}  {:>8}  {:>5}",
             board.poll.options[o], c[0], c[1], c[2], result.available[o], result.score[o]
         );
+    }
+}
+
+/// No single key holder: alice, bob and carol run a 2-of-3 key ceremony,
+/// and any two of them can decrypt the result.
+fn trustee_poll() {
+    let names = ["alice", "bob", "carol"];
+    let ids: Vec<_> = names
+        .iter()
+        .map(|_| TrusteeIdentity::generate(&mut OsRng))
+        .collect();
+
+    // 1. Everyone opens their link and registers a trustee key.
+    let regs: Vec<_> = ids
+        .iter()
+        .map(|i| i.register("team-dinner-trustees", &mut OsRng))
+        .collect();
+    let ceremony = Ceremony::new("team-dinner-trustees", 2, &regs).unwrap();
+    println!("2-of-3 key ceremony between {}", names.join(", "));
+
+    // 2. Everyone deals encrypted shares of their own secret.
+    let dealings: Vec<_> = ids
+        .iter()
+        .map(|i| ceremony.deal(i, &mut OsRng).unwrap())
+        .collect();
+
+    // 3. Everyone checks the shares they received.
+    let complaints: Vec<_> = ids
+        .iter()
+        .flat_map(|i| ceremony.check_dealings(i, &dealings, &mut OsRng).unwrap())
+        .collect();
+    println!("{} complaints", complaints.len());
+
+    // 4. The joint key is public; each trustee keeps their own share.
+    let key = ceremony.finalize(&dealings, &complaints).unwrap();
+    let shares: Vec<_> = ids
+        .iter()
+        .map(|i| ceremony.key_share(i, &dealings, &complaints).unwrap())
+        .collect();
+
+    let days = ["Fri 24 Oct", "Sat 25 Oct", "Sun 26 Oct"]
+        .map(String::from)
+        .to_vec();
+    let mut board = BulletinBoard::new(Poll::new(
+        "team-dinner-trustees",
+        days,
+        BallotKind::Approval,
+        key,
+    ));
+    for approvals in [[true, true, false], [false, true, true], [true, true, true]] {
+        let ballot = cast_ballot(&board.poll, &approvals, &mut OsRng).unwrap();
+        board.submit(ballot).unwrap();
+    }
+    println!("{} ballots cast", board.ballots().len());
+
+    // carol is offline: alice and bob are enough.
+    let partials: Vec<_> = shares[..2]
+        .iter()
+        .map(|s| partial_decrypt(s, &board, &mut OsRng))
+        .collect();
+    let lonely = combine_tally(&board, &partials[..1]);
+    println!("alice alone: {}", lonely.unwrap_err());
+
+    let tally = combine_tally(&board, &partials).unwrap();
+    match verify_tally(&board, &tally) {
+        Ok(()) => println!("alice + bob decrypted, tally verified\n"),
+        Err(e) => println!("tally verification FAILED: {e}\n"),
+    }
+    for (day, count) in board.poll.options.iter().zip(&tally.counts) {
+        println!("{day}: {count} {}", "█".repeat(*count as usize));
     }
 }

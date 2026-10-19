@@ -46,7 +46,7 @@ impl SecretKey {
         &self.x
     }
 
-    /// Returns `m·G`. Use [`discrete_log`] to recover `m`.
+    /// Returns `m·G`; [`SecretKey::decrypt`] also recovers `m`.
     pub fn decrypt_to_point(&self, ct: &Ciphertext) -> RistrettoPoint {
         ct.b - self.x * ct.a
     }

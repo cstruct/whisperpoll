@@ -7,8 +7,9 @@ use curve25519_dalek::{constants::RISTRETTO_BASEPOINT_POINT as G, scalar::Scalar
 use rand_core::CryptoRngCore;
 use sha2::{Digest, Sha256};
 
-use crate::elgamal::{discrete_log, Ciphertext, PublicKey, SecretKey};
-use crate::proofs::{BitProof, DecryptionProof, ValueProof};
+use crate::elgamal::{discrete_log, Ciphertext, SecretKey};
+use crate::proofs::{BitProof, ValueProof};
+use crate::threshold::{self, KeyShare, PartialDecryption, TallyKey};
 use crate::{ranked, tiered};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,14 +24,16 @@ pub enum BallotKind {
 }
 
 impl BallotKind {
+    /// Bound into every proof, so the ballot format is fixed before anyone votes.
     fn tag(&self) -> [u8; 9] {
-        let (tag, param) = match self {
+        let (tag, tiers) = match self {
             BallotKind::Approval => (0, 0),
             BallotKind::Ranked => (1, 0),
             BallotKind::Tiered { tiers } => (2, *tiers as u64),
         };
-        let mut out = [tag; 9];
-        out[1..].copy_from_slice(&param.to_le_bytes());
+        let mut out = [0; 9];
+        out[0] = tag;
+        out[1..].copy_from_slice(&tiers.to_le_bytes());
         out
     }
 }
@@ -41,7 +44,7 @@ pub struct Poll {
     pub id: String,
     pub options: Vec<String>,
     pub kind: BallotKind,
-    pub public_key: PublicKey,
+    pub key: TallyKey,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,8 +79,11 @@ pub struct Receipt(pub [u8; 32]);
 /// (option, tier) for tiered polls (see [`crate::TieredResult`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TallyResult {
+    /// How many ballots were tallied.
+    pub ballots: u64,
     pub counts: Vec<u64>,
-    pub proofs: Vec<DecryptionProof>,
+    /// The trustees' proven partial decryptions the counts were combined from.
+    pub partials: Vec<PartialDecryption>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,7 +100,11 @@ pub enum Error {
     InvalidColumnProof { rank: usize },
     DuplicateBallot,
     WrongResultLength,
-    InvalidDecryptionProof { cell: usize },
+    WrongBallotCount,
+    NotEnoughPartials { have: usize, need: usize },
+    InvalidPartial { trustee: u32 },
+    DuplicatePartial { trustee: u32 },
+    CountMismatch { cell: usize },
     CountOutOfRange { cell: usize },
 }
 
@@ -125,8 +135,24 @@ impl fmt::Display for Error {
             }
             Error::DuplicateBallot => write!(f, "ballot already on the board"),
             Error::WrongResultLength => write!(f, "result does not cover every cell"),
-            Error::InvalidDecryptionProof { cell } => {
-                write!(f, "decryption proof for cell {cell} does not verify")
+            Error::WrongBallotCount => write!(f, "result's ballot count does not match the board"),
+            Error::NotEnoughPartials { have, need } => {
+                write!(f, "{have} valid partial decryptions, {need} needed")
+            }
+            Error::InvalidPartial { trustee } => {
+                write!(
+                    f,
+                    "partial decryption from trustee {trustee} does not verify"
+                )
+            }
+            Error::DuplicatePartial { trustee } => {
+                write!(f, "trustee {trustee} contributed more than once")
+            }
+            Error::CountMismatch { cell } => {
+                write!(
+                    f,
+                    "count for cell {cell} is not what the partials decrypt to"
+                )
             }
             Error::CountOutOfRange { cell } => {
                 write!(f, "count for cell {cell} is not a valid tally")
@@ -142,13 +168,13 @@ impl Poll {
         id: impl Into<String>,
         options: Vec<String>,
         kind: BallotKind,
-        public_key: PublicKey,
+        key: impl Into<TallyKey>,
     ) -> Self {
         Poll {
             id: id.into(),
             options,
             kind,
-            public_key,
+            key: key.into(),
         }
     }
 
@@ -158,7 +184,7 @@ impl Poll {
         match self.kind {
             BallotKind::Approval => n,
             BallotKind::Ranked => n * n,
-            BallotKind::Tiered { tiers } => n * tiers,
+            BallotKind::Tiered { tiers, .. } => n * tiers,
         }
     }
 
@@ -175,7 +201,7 @@ impl Poll {
             h.update((o.len() as u64).to_le_bytes());
             h.update(o.as_bytes());
         }
-        h.update(self.public_key.to_bytes());
+        self.key.hash_into(&mut h);
         let mut ctx = h.finalize().to_vec();
         ctx.extend_from_slice(label);
         ctx.extend_from_slice(&(index as u64).to_le_bytes());
@@ -191,7 +217,7 @@ impl Poll {
         }
         for (i, choice) in ballot.choices.iter().enumerate() {
             if !choice.proof.verify(
-                &self.public_key,
+                &self.key.public_key,
                 &choice.ciphertext,
                 &self.context(b"cell", i),
             ) {
@@ -202,7 +228,7 @@ impl Poll {
             BallotKind::Approval if ballot.sum_proofs.is_empty() => Ok(()),
             BallotKind::Approval => Err(Error::WrongSumProofCount),
             BallotKind::Ranked => ranked::verify_permutation(self, ballot),
-            BallotKind::Tiered { tiers } => tiered::verify_rows(self, tiers, ballot),
+            BallotKind::Tiered { tiers, .. } => tiered::verify_rows(self, tiers, ballot),
         }
     }
 
@@ -213,9 +239,9 @@ impl Poll {
         bit: bool,
         rng: &mut impl CryptoRngCore,
     ) -> (EncryptedChoice, Scalar) {
-        let (ciphertext, r) = self.public_key.encrypt(bit as u64, rng);
+        let (ciphertext, r) = self.key.public_key.encrypt(bit as u64, rng);
         let proof = BitProof::prove(
-            &self.public_key,
+            &self.key.public_key,
             &ciphertext,
             bit,
             &r,
@@ -314,46 +340,91 @@ impl BulletinBoard {
     }
 }
 
-/// Run by the key holder: decrypt only the aggregate, never individual ballots.
+/// Run by anyone once at least `t` trustees have published partial
+/// decryptions: checks each, ignores invalid ones, and combines the first `t`
+/// valid ones into the counts.
+pub fn combine_tally(
+    board: &BulletinBoard,
+    partials: &[PartialDecryption],
+) -> Result<TallyResult, Error> {
+    let tally = board.encrypted_tally();
+    let need = board.poll.key.threshold();
+    let mut used: Vec<PartialDecryption> = Vec::with_capacity(need);
+    for p in partials {
+        if used.len() == need {
+            break;
+        }
+        if used.iter().all(|u| u.trustee != p.trustee)
+            && threshold::verify_partial(&board.poll, &tally, p)
+        {
+            used.push(p.clone());
+        }
+    }
+    if used.len() < need {
+        return Err(Error::NotEnoughPartials {
+            have: used.len(),
+            need,
+        });
+    }
+    let max = board.ballots.len() as u64;
+    let counts = threshold::combine(&tally, &used)
+        .iter()
+        .enumerate()
+        .map(|(cell, m)| discrete_log(m, max).ok_or(Error::CountOutOfRange { cell }))
+        .collect::<Result<_, _>>()?;
+    Ok(TallyResult {
+        ballots: max,
+        counts,
+        partials: used,
+    })
+}
+
+/// Shortcut for a poll with a single key holder (a 1-of-1 [`TallyKey`]).
 pub fn decrypt_tally(
     sk: &SecretKey,
     board: &BulletinBoard,
     rng: &mut impl CryptoRngCore,
-) -> TallyResult {
-    let max = board.ballots.len() as u64;
-    let (counts, proofs) = board
-        .encrypted_tally()
-        .iter()
-        .enumerate()
-        .map(|(i, ct)| {
-            let (point, proof) =
-                DecryptionProof::prove(sk, ct, &board.poll.context(b"cell", i), rng);
-            let count = discrete_log(&point, max)
-                .expect("every ballot proved its cells are 0/1, so the sum is <= ballot count");
-            (count, proof)
-        })
-        .unzip();
-    TallyResult { counts, proofs }
+) -> Result<TallyResult, Error> {
+    let partial = threshold::partial_decrypt(&KeyShare::from(sk), board, rng);
+    combine_tally(board, &[partial])
 }
 
-/// Run by anyone: re-check every ballot, recompute the aggregate from scratch
-/// and confirm each published count is its proven decryption.
+/// Run by anyone: re-check every ballot, recompute the aggregate from scratch,
+/// check every partial decryption, and confirm each published count is what
+/// they combine to.
 pub fn verify_tally(board: &BulletinBoard, result: &TallyResult) -> Result<(), Error> {
     let poll = &board.poll;
-    if result.counts.len() != poll.tally_len() || result.proofs.len() != poll.tally_len() {
+    if result.counts.len() != poll.tally_len() {
         return Err(Error::WrongResultLength);
+    }
+    if result.ballots != board.ballots.len() as u64 {
+        return Err(Error::WrongBallotCount);
     }
     for ballot in &board.ballots {
         poll.verify_ballot(ballot)?;
     }
-    for (i, ct) in board.encrypted_tally().iter().enumerate() {
-        let count = result.counts[i];
-        if count > board.ballots.len() as u64 {
-            return Err(Error::CountOutOfRange { cell: i });
+    let tally = board.encrypted_tally();
+    if result.partials.len() < poll.key.threshold() {
+        return Err(Error::NotEnoughPartials {
+            have: result.partials.len(),
+            need: poll.key.threshold(),
+        });
+    }
+    for (i, p) in result.partials.iter().enumerate() {
+        if result.partials[..i].iter().any(|q| q.trustee == p.trustee) {
+            return Err(Error::DuplicatePartial { trustee: p.trustee });
         }
-        let plaintext = Scalar::from(count) * G;
-        if !result.proofs[i].verify(&poll.public_key, ct, &plaintext, &poll.context(b"cell", i)) {
-            return Err(Error::InvalidDecryptionProof { cell: i });
+        if !threshold::verify_partial(poll, &tally, p) {
+            return Err(Error::InvalidPartial { trustee: p.trustee });
+        }
+    }
+    let plaintexts = threshold::combine(&tally, &result.partials);
+    for (cell, (&count, m)) in result.counts.iter().zip(&plaintexts).enumerate() {
+        if count > result.ballots {
+            return Err(Error::CountOutOfRange { cell });
+        }
+        if Scalar::from(count) * G != *m {
+            return Err(Error::CountMismatch { cell });
         }
     }
     Ok(())

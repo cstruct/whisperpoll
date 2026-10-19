@@ -28,7 +28,7 @@ fn end_to_end_tally_is_correct_and_verifiable() {
         })
         .collect();
 
-    let result = decrypt_tally(&sk, &board, &mut OsRng);
+    let result = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     assert_eq!(result.counts, vec![2, 3, 2]);
 
     // Each voter: my ballot is on the board, and the board's tally checks out.
@@ -46,11 +46,11 @@ fn lying_about_the_result_is_detected() {
             .submit(cast_ballot(&board.poll, &v, &mut OsRng).unwrap())
             .unwrap();
     }
-    let mut result = decrypt_tally(&sk, &board, &mut OsRng);
+    let mut result = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
     result.counts[1] += 1;
     assert_eq!(
         verify_tally(&board, &result),
-        Err(Error::InvalidDecryptionProof { cell: 1 })
+        Err(Error::CountMismatch { cell: 1 })
     );
 }
 
@@ -62,7 +62,7 @@ fn dropping_a_ballot_after_tally_is_detected() {
             .submit(cast_ballot(&board.poll, &v, &mut OsRng).unwrap())
             .unwrap();
     }
-    let result = decrypt_tally(&sk, &board, &mut OsRng);
+    let result = decrypt_tally(&sk, &board, &mut OsRng).unwrap();
 
     // A board that silently omits the second ballot no longer matches the published result.
     let mut tampered = BulletinBoard::new(board.poll.clone());
@@ -73,7 +73,7 @@ fn dropping_a_ballot_after_tally_is_detected() {
 #[test]
 fn ballot_stuffing_is_rejected() {
     let (_, mut board) = setup();
-    let pk = board.poll.public_key;
+    let pk = board.poll.key.public_key;
     // Swap in an encryption of 5 "yes" votes, keeping the proof made for a 1.
     let mut stuffed = cast_ballot(&board.poll, &[true, false, false], &mut OsRng).unwrap();
     stuffed.choices[0].ciphertext = pk.encrypt(5, &mut OsRng).0;

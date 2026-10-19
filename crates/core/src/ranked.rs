@@ -47,7 +47,7 @@ pub fn cast_ranked_ballot(
         .map(|i| poll.encrypt_cell(i, rank_of[i / n] == Some(i % n), rng))
         .unzip();
 
-    let pk = &poll.public_key;
+    let pk = &poll.key.public_key;
     let mut sum_proofs = Vec::with_capacity(2 * n);
     for option in 0..n {
         let cells = row(n, option);
@@ -87,7 +87,7 @@ pub(crate) fn verify_permutation(poll: &Poll, ballot: &Ballot) -> Result<(), Err
     if ballot.sum_proofs.len() != 2 * n {
         return Err(Error::WrongSumProofCount);
     }
-    let pk = &poll.public_key;
+    let pk = &poll.key.public_key;
     let (row_proofs, col_proofs) = ballot.sum_proofs.split_at(n);
     for (option, proof) in row_proofs.iter().enumerate() {
         let ct = sum_cells(&ballot.choices, row(n, option));
