@@ -37,6 +37,10 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>To add the days your poll picked to your calendar.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>To add the days your poll picked to your calendar.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

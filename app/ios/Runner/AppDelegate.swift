@@ -15,5 +15,8 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "PushBridge") {
       PushBridge.register(with: registrar)
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "CalendarBridge") {
+      CalendarBridge.register(with: registrar)
+    }
   }
 }

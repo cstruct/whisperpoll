@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'calendar.dart';
 import 'connection.dart';
 import 'model.dart';
 import 'src/rust/api/poll.dart' as rust;
@@ -742,22 +743,69 @@ class _Tallying extends StatelessWidget {
   }
 }
 
-class _ResultSummary extends StatelessWidget {
+class _ResultSummary extends StatefulWidget {
   const _ResultSummary(this.s, this.outcomes);
   final _Ctx s;
   final List<rust.OutcomeOut> outcomes;
 
-  Future<void> _export(BuildContext context, List<rust.OutcomeOut> picked) async {
-    final view = s.view;
+  @override
+  State<_ResultSummary> createState() => _ResultSummaryState();
+}
+
+class _ResultSummaryState extends State<_ResultSummary> {
+  /// Picked dates already added to this phone's calendar.
+  List<String> _added = [];
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    DeviceCalendar.added(widget.s.invite).then((d) {
+      if (mounted) setState(() => _added = d);
+    });
+  }
+
+  List<rust.OutcomeOut> get _picked => [for (final o in widget.outcomes) if (o.winnerDate != null) o];
+
+  String _note(rust.OutcomeOut o) =>
+      '${o.winnerAvailable} of ${o.ballots} can make it. Picked with whisperpoll.';
+
+  Future<void> _addToCalendar() async {
+    final picked = _picked;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      final count = await DeviceCalendar.add(widget.s.invite, [
+        for (final o in picked)
+          DayEvent(date: o.winnerDate!, title: widget.s.view.title, notes: _note(o)),
+      ]);
+      setState(() => _added = [for (final o in picked) o.winnerDate!]);
+      messenger.showSnackBar(SnackBar(
+        content: Text(count == 1 ? 'Added to your calendar.' : 'Added $count days to your calendar.'),
+        action: SnackBarAction(label: 'Open', onPressed: () => DeviceCalendar.open(picked.first.winnerDate!)),
+      ));
+    } on PlatformException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.code == 'denied'
+            ? 'Calendar access is off. Allow it in Settings, or share the .ics file instead.'
+            : "Couldn't add to your calendar: ${e.message}"),
+      ));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// The same days as an .ics file, for other calendars or other people.
+  Future<void> _shareIcs() async {
+    final view = widget.s.view;
+    final picked = _picked;
     final stamp = DateFormat("yyyyMMdd'T'HHmmss'Z'").format(DateTime.now().toUtc());
     final ics = rust.calendarIcs(
       title: view.title,
       pollId: view.id,
       stamp: stamp,
       dates: [for (final o in picked) o.winnerDate!],
-      notes: [
-        for (final o in picked) '${o.winnerAvailable} of ${o.ballots} can make it. Picked with whisperpoll.'
-      ],
+      notes: [for (final o in picked) _note(o)],
     );
     final dir = await getTemporaryDirectory();
     final slug = view.title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-|-$'), '');
@@ -771,10 +819,12 @@ class _ResultSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final outcomes = widget.outcomes;
     if (outcomes.isEmpty) return const Center(child: CircularProgressIndicator());
     final theme = Theme.of(context);
-    final picked = [for (final o in outcomes) if (o.winnerDate != null) o];
-    final days = s.view.days;
+    final picked = _picked;
+    final days = widget.s.view.days;
+    final inCalendar = picked.isNotEmpty && picked.every((o) => _added.contains(o.winnerDate));
     return Card(
       color: theme.colorScheme.primaryContainer,
       margin: const EdgeInsets.only(bottom: 12),
@@ -799,10 +849,29 @@ class _ResultSummary extends StatelessWidget {
             ],
             if (picked.isNotEmpty) ...[
               const SizedBox(height: 12),
-              FilledButton.tonalIcon(
-                onPressed: () => _export(context, picked),
-                icon: const Icon(Icons.event),
-                label: Text(picked.length == 1 ? 'Add to calendar' : 'Add all ${picked.length} to calendar'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (inCalendar)
+                    FilledButton.tonalIcon(
+                      onPressed: () => DeviceCalendar.open(picked.first.winnerDate!),
+                      icon: const Icon(Icons.event_available),
+                      label: const Text('In your calendar'),
+                    )
+                  else
+                    FilledButton.icon(
+                      onPressed: _busy ? null : _addToCalendar,
+                      icon: const Icon(Icons.event),
+                      label: Text(picked.length == 1 ? 'Add to calendar' : 'Add all ${picked.length} to calendar'),
+                    ),
+                  TextButton.icon(
+                    onPressed: _shareIcs,
+                    icon: const Icon(Icons.ios_share, size: 18),
+                    label: const Text('Share .ics'),
+                  ),
+                ],
               ),
             ],
           ],
