@@ -20,7 +20,9 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::broadcast;
 use tower_http::services::{ServeDir, ServeFile};
-use whisperpoll_protocol::{ClientMsg, CreatePoll, Created, PollSummary, ServerMsg};
+use whisperpoll_protocol::{
+    ClientMsg, CreatePoll, Created, Invitation, JoinPoll, PollSummary, ServerMsg,
+};
 
 use room::{random_token, Room};
 use store::{Store, HEARTBEAT};
@@ -48,6 +50,8 @@ async fn main() {
         .route("/api/polls", post(create_poll))
         .route("/api/polls/{id}/check", get(check))
         .route("/api/polls/{id}/summary", get(summary))
+        .route("/api/polls/{id}/invitation", get(invitation))
+        .route("/api/polls/{id}/join", post(join))
         .route("/ws/{id}", get(connect))
         .fallback_service(static_files)
         .with_state(AppState {
@@ -126,6 +130,47 @@ async fn summary(
     match summary.flatten() {
         Some(summary) => Ok(Json(summary)),
         None => Err((StatusCode::NOT_FOUND, "unknown poll or invite".into())),
+    }
+}
+
+#[derive(Deserialize)]
+struct Code {
+    c: String,
+}
+
+/// What the open invite (QR code) `c` is for; 404 if it doesn't work (any
+/// more).
+async fn invitation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(code): Query<Code>,
+) -> Result<Json<Invitation>, (StatusCode, String)> {
+    let found = state
+        .store
+        .read(&id, |r, _| r.invitation(&code.c))
+        .await
+        .map_err(storage_error)?;
+    match found.flatten() {
+        Some(invitation) => Ok(Json(invitation)),
+        None => Err((StatusCode::NOT_FOUND, "this invite no longer works".into())),
+    }
+}
+
+/// Joins through the open invite under a name of the joiner's choosing.
+async fn join(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<JoinPoll>,
+) -> Result<Json<Created>, (StatusCode, String)> {
+    let joined = state
+        .store
+        .update(&id, |r, _| r.join(&req.code, &req.name))
+        .await
+        .map_err(storage_error)?;
+    match joined {
+        Some(Ok(token)) => Ok(Json(Created { id, token })),
+        Some(Err(e)) => Err((StatusCode::BAD_REQUEST, e)),
+        None => Err((StatusCode::NOT_FOUND, "this poll no longer exists".into())),
     }
 }
 

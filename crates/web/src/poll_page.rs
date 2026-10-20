@@ -511,6 +511,11 @@ fn Invites() -> impl IntoView {
             name.set(String::new());
         }
     };
+    let open_invite = move || {
+        read(conn, None, |v| {
+            v.join_code.clone().map(|c| (v.id.clone(), c))
+        })
+    };
     let links = move || {
         read(conn, Vec::new(), |v| {
             v.invites
@@ -557,6 +562,19 @@ fn Invites() -> impl IntoView {
                         .collect_view()
                 }}
             </ul>
+            {move || {
+                open_invite()
+                    .map(|(poll, code)| {
+                        view! {
+                            <h2>"…or let them scan"</h2>
+                            <crate::join::OpenInvite
+                                poll
+                                code
+                                on_new=|| net::send(&ClientMsg::NewJoinCode)
+                            />
+                        }
+                    })
+            }}
         </div>
     }
 }

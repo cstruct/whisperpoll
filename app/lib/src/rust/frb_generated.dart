@@ -5,6 +5,7 @@
 
 import 'api/muzak.dart';
 import 'api/poll.dart';
+import 'api/qr.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -70,7 +71,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -1281500257;
+  int get rustContentHash => -436959736;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -101,6 +102,12 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiPollInitApp();
 
+  String crateApiQrJoinLink({
+    required String server,
+    required String poll,
+    required String code,
+  });
+
   String? crateApiPollMakeSlot({
     required String date,
     required String time,
@@ -120,6 +127,8 @@ abstract class RustLibApi extends BaseApi {
     required String viewJson,
     required List<String?> receipts,
   });
+
+  QrArt? crateApiQrQrArt({required String text});
 
   SlotTimes? crateApiPollSlotTimes({required String slot});
 }
@@ -282,6 +291,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  String crateApiQrJoinLink({
+    required String server,
+    required String poll,
+    required String code,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(server, serializer);
+          sse_encode_String(poll, serializer);
+          sse_encode_String(code, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiQrJoinLinkConstMeta,
+        argValues: [server, poll, code],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiQrJoinLinkConstMeta => const TaskConstMeta(
+    debugName: "join_link",
+    argNames: ["server", "poll", "code"],
+  );
+
+  @override
   String? crateApiPollMakeSlot({
     required String date,
     required String time,
@@ -296,7 +336,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(time, serializer);
           sse_encode_i_32(offsetMinutes, serializer);
           sse_encode_u_32(minutes, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_String,
@@ -320,7 +360,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -352,7 +392,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -386,7 +426,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -407,13 +447,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  QrArt? crateApiQrQrArt({required String text}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(text, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_qr_art,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiQrQrArtConstMeta,
+        argValues: [text],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiQrQrArtConstMeta =>
+      const TaskConstMeta(debugName: "qr_art", argNames: ["text"]);
+
+  @override
   SlotTimes? crateApiPollSlotTimes({required String slot}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(slot, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_box_autoadd_slot_times,
@@ -457,6 +520,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   bool dco_decode_box_autoadd_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
+  }
+
+  @protected
+  QrArt dco_decode_box_autoadd_qr_art(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_qr_art(raw);
   }
 
   @protected
@@ -526,6 +595,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<QrPiece> dco_decode_list_qr_piece(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_qr_piece).toList();
+  }
+
+  @protected
   List<RowOut> dco_decode_list_row_out(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_row_out).toList();
@@ -553,6 +628,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   bool? dco_decode_opt_box_autoadd_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_bool(raw);
+  }
+
+  @protected
+  QrArt? dco_decode_opt_box_autoadd_qr_art(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_qr_art(raw);
   }
 
   @protected
@@ -588,6 +669,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       winnerChecksOut: dco_decode_bool(arr[5]),
       decryptedBy: dco_decode_list_String(arr[6]),
       mine: dco_decode_opt_box_autoadd_bool(arr[7]),
+    );
+  }
+
+  @protected
+  QrArt dco_decode_qr_art(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return QrArt(
+      size: dco_decode_u_32(arr[0]),
+      quiet: dco_decode_u_32(arr[1]),
+      pieces: dco_decode_list_qr_piece(arr[2]),
+    );
+  }
+
+  @protected
+  QrPiece dco_decode_qr_piece(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return QrPiece(
+      kind: dco_decode_u_8(arr[0]),
+      x: dco_decode_u_32(arr[1]),
+      y: dco_decode_u_32(arr[2]),
+      n: dco_decode_u_32(arr[3]),
     );
   }
 
@@ -673,6 +781,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   bool sse_decode_box_autoadd_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_bool(deserializer));
+  }
+
+  @protected
+  QrArt sse_decode_box_autoadd_qr_art(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_qr_art(deserializer));
   }
 
   @protected
@@ -770,6 +884,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<QrPiece> sse_decode_list_qr_piece(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <QrPiece>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_qr_piece(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<RowOut> sse_decode_list_row_out(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -806,6 +932,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_bool(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  QrArt? sse_decode_opt_box_autoadd_qr_art(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_qr_art(deserializer));
     } else {
       return null;
     }
@@ -867,6 +1004,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       decryptedBy: var_decryptedBy,
       mine: var_mine,
     );
+  }
+
+  @protected
+  QrArt sse_decode_qr_art(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_size = sse_decode_u_32(deserializer);
+    var var_quiet = sse_decode_u_32(deserializer);
+    var var_pieces = sse_decode_list_qr_piece(deserializer);
+    return QrArt(size: var_size, quiet: var_quiet, pieces: var_pieces);
+  }
+
+  @protected
+  QrPiece sse_decode_qr_piece(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_u_8(deserializer);
+    var var_x = sse_decode_u_32(deserializer);
+    var var_y = sse_decode_u_32(deserializer);
+    var var_n = sse_decode_u_32(deserializer);
+    return QrPiece(kind: var_kind, x: var_x, y: var_y, n: var_n);
   }
 
   @protected
@@ -942,6 +1098,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_bool(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_qr_art(QrArt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_qr_art(self, serializer);
   }
 
   @protected
@@ -1043,6 +1205,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_qr_piece(List<QrPiece> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_qr_piece(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_row_out(List<RowOut> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
@@ -1075,6 +1246,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_bool(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_qr_art(
+    QrArt? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_qr_art(self, serializer);
     }
   }
 
@@ -1125,6 +1309,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.winnerChecksOut, serializer);
     sse_encode_list_String(self.decryptedBy, serializer);
     sse_encode_opt_box_autoadd_bool(self.mine, serializer);
+  }
+
+  @protected
+  void sse_encode_qr_art(QrArt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.size, serializer);
+    sse_encode_u_32(self.quiet, serializer);
+    sse_encode_list_qr_piece(self.pieces, serializer);
+  }
+
+  @protected
+  void sse_encode_qr_piece(QrPiece self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_8(self.kind, serializer);
+    sse_encode_u_32(self.x, serializer);
+    sse_encode_u_32(self.y, serializer);
+    sse_encode_u_32(self.n, serializer);
   }
 
   @protected

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'history.dart';
+import 'join.dart';
 import 'maxi.dart';
 import 'muzak.dart';
 import 'storage.dart';
@@ -62,6 +63,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _join() async {
     final invite = Invite.parse(_link.text);
+    final open = JoinLink.parse(_link.text);
+    if (invite == null && open != null) {
+      _link.clear();
+      setState(() => _error = null);
+      final joined = await joinWithLink(context, open);
+      if (joined != null) await _open(joined);
+      return;
+    }
     if (invite == null) {
       setState(() => _error = "That doesn't look like a whisperpoll invite link.");
       return;

@@ -223,6 +223,7 @@ class ZigCard extends StatelessWidget {
             child: Padding(
               padding: padding,
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   if (title != null) ...[

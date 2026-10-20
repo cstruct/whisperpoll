@@ -577,6 +577,56 @@ progress::-moz-progress-bar {
   padding-bottom: 72px;
 }
 
+/* The open invite's QR code: a white sticker, tilted, with a star. */
+
+.open-invite {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.qr-sticker {
+  position: relative;
+  margin: 8px 0 4px;
+  padding: 12px 12px 10px;
+  width: min(280px, 100%);
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  box-shadow: 6px 6px 0 var(--pink);
+  transform: rotate(-2deg);
+}
+
+.qr {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.qr-sticker figcaption {
+  font: 1.05rem/1.1 var(--pixel);
+  color: var(--ink);
+  margin-top: 6px;
+}
+
+.scan-me {
+  position: absolute;
+  top: -14px;
+  left: -10px;
+  transform: rotate(-8deg);
+  background: var(--ink);
+  color: var(--lime);
+  font-size: 0.8rem;
+}
+
+.qr-star {
+  position: absolute;
+  top: -16px;
+  right: -14px;
+  width: 34px;
+  height: 34px;
+}
+
 /* Home */
 
 .hero {

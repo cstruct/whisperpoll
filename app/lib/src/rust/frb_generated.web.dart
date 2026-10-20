@@ -8,6 +8,7 @@
 
 import 'api/muzak.dart';
 import 'api/poll.dart';
+import 'api/qr.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -35,6 +36,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool dco_decode_box_autoadd_bool(dynamic raw);
+
+  @protected
+  QrArt dco_decode_box_autoadd_qr_art(dynamic raw);
 
   @protected
   SlotTimes dco_decode_box_autoadd_slot_times(dynamic raw);
@@ -70,6 +74,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<QrPiece> dco_decode_list_qr_piece(dynamic raw);
+
+  @protected
   List<RowOut> dco_decode_list_row_out(dynamic raw);
 
   @protected
@@ -82,6 +89,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool? dco_decode_opt_box_autoadd_bool(dynamic raw);
 
   @protected
+  QrArt? dco_decode_opt_box_autoadd_qr_art(dynamic raw);
+
+  @protected
   SlotTimes? dco_decode_opt_box_autoadd_slot_times(dynamic raw);
 
   @protected
@@ -92,6 +102,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OutcomeOut dco_decode_outcome_out(dynamic raw);
+
+  @protected
+  QrArt dco_decode_qr_art(dynamic raw);
+
+  @protected
+  QrPiece dco_decode_qr_piece(dynamic raw);
 
   @protected
   RowOut dco_decode_row_out(dynamic raw);
@@ -122,6 +138,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool sse_decode_box_autoadd_bool(SseDeserializer deserializer);
+
+  @protected
+  QrArt sse_decode_box_autoadd_qr_art(SseDeserializer deserializer);
 
   @protected
   SlotTimes sse_decode_box_autoadd_slot_times(SseDeserializer deserializer);
@@ -157,6 +176,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<QrPiece> sse_decode_list_qr_piece(SseDeserializer deserializer);
+
+  @protected
   List<RowOut> sse_decode_list_row_out(SseDeserializer deserializer);
 
   @protected
@@ -167,6 +189,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer);
+
+  @protected
+  QrArt? sse_decode_opt_box_autoadd_qr_art(SseDeserializer deserializer);
 
   @protected
   SlotTimes? sse_decode_opt_box_autoadd_slot_times(
@@ -181,6 +206,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OutcomeOut sse_decode_outcome_out(SseDeserializer deserializer);
+
+  @protected
+  QrArt sse_decode_qr_art(SseDeserializer deserializer);
+
+  @protected
+  QrPiece sse_decode_qr_piece(SseDeserializer deserializer);
 
   @protected
   RowOut sse_decode_row_out(SseDeserializer deserializer);
@@ -211,6 +242,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_qr_art(QrArt self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_slot_times(
@@ -261,6 +295,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_qr_piece(List<QrPiece> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_row_out(List<RowOut> self, SseSerializer serializer);
 
   @protected
@@ -271,6 +308,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_qr_art(QrArt? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_slot_times(
@@ -289,6 +329,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_outcome_out(OutcomeOut self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_qr_art(QrArt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_qr_piece(QrPiece self, SseSerializer serializer);
 
   @protected
   void sse_encode_row_out(RowOut self, SseSerializer serializer);

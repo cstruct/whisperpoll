@@ -4,6 +4,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
 import 'home_screen.dart';
+import 'join.dart';
 import 'maxi.dart';
 import 'muzak.dart';
 import 'poll_screen.dart';
@@ -48,7 +49,13 @@ class _WhisperpollAppState extends State<WhisperpollApp> {
 
   Future<void> _openLink(String link) async {
     final invite = Invite.parse(link);
-    if (invite != null) await openInvite(invite);
+    if (invite != null) return openInvite(invite);
+    // An open invite (QR code): pick a name first.
+    final open = JoinLink.parse(link);
+    final context = _navigator.currentContext;
+    if (open == null || context == null) return;
+    final joined = await joinWithLink(context, open);
+    if (joined != null) await openInvite(joined);
   }
 
   Future<void> _openFromNotification() async {

@@ -43,6 +43,12 @@ cd crates/web && trunk build && cd ../..
 cargo run -p whisperpoll-server
 ```
 
+Besides per-person links, the creator can show a QR code (the open
+invite, `/j/{poll}?c={code}`): whoever scans it picks their own name and
+joins. "New code" retires a QR code that went too far. The code is drawn
+in the app's style but uses the highest error correction, and a test
+decodes the stylized version to make sure it still scans.
+
 To try a poll alone, open each invite link in its own tab. Keys are stored
 per invite, so one browser can play every participant.
 

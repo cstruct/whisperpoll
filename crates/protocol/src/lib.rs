@@ -26,6 +26,7 @@
 
 pub mod calendar;
 pub mod client;
+pub mod qr;
 pub mod slot;
 
 use serde::{Deserialize, Serialize};
@@ -47,7 +48,24 @@ pub struct CreatePoll {
     pub name: String,
 }
 
-/// `POST /api/polls` response: the creator's own link is `/p/{id}?t={token}`.
+/// `POST /api/polls/{id}/join`: join a poll through its open invite (the
+/// QR code), under a name of your own choosing.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JoinPoll {
+    pub code: String,
+    pub name: String,
+}
+
+/// `GET /api/polls/{id}/invitation?c={code}`: what the open invite is for.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Invitation {
+    pub title: String,
+    /// The creator's name.
+    pub from: String,
+}
+
+/// `POST /api/polls` and `POST /api/polls/{id}/join` response: the
+/// participant's own link is `/p/{id}?t={token}`.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Created {
     pub id: String,
@@ -119,6 +137,11 @@ pub struct PollView {
     pub me: usize,
     pub participants: Vec<ParticipantView>,
     pub invites: Vec<InviteLink>,
+    /// The open invite's code, for the creator while people can still join:
+    /// anyone with `/j/{id}?c={code}` (the QR code) can join under a name of
+    /// their own.
+    #[serde(default)]
+    pub join_code: Option<String>,
     /// Suggested slots, earliest first.
     pub slots: Vec<SlotSuggestion>,
     pub ceremony: Option<CeremonyView>,
@@ -184,6 +207,8 @@ pub enum ClientMsg {
     CloseVoting,
     /// The creator is done inviting: move on to suggesting times.
     FinishInviting,
+    /// The creator retires the open invite's code (and QR) for a new one.
+    NewJoinCode,
     Partial(PartialDecryption),
     /// A device that should get push notifications for this participant
     /// when they're offline and needed.

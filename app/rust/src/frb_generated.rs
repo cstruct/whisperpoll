@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1281500257;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -436959736;
 
 // Section: executor
 
@@ -218,6 +218,39 @@ fn wire__crate__api__poll__init_app_impl(
         },
     )
 }
+fn wire__crate__api__qr__join_link_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "join_link",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_server = <String>::sse_decode(&mut deserializer);
+            let api_poll = <String>::sse_decode(&mut deserializer);
+            let api_code = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok =
+                    Ok::<_, ()>(crate::api::qr::join_link(api_server, api_poll, api_code))?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__poll__make_slot_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -352,6 +385,36 @@ fn wire__crate__api__poll__outcomes_impl(
                     std::result::Result::Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__qr__qr_art_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "qr_art",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_text = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::qr::qr_art(api_text))?;
+                std::result::Result::Ok(output_ok)
+            })())
         },
     )
 }
@@ -501,6 +564,18 @@ impl SseDecode for Vec<u8> {
     }
 }
 
+impl SseDecode for Vec<crate::api::qr::QrPiece> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::qr::QrPiece>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::poll::RowOut> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -541,6 +616,17 @@ impl SseDecode for Option<bool> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<bool>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::qr::QrArt> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::qr::QrArt>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -600,6 +686,36 @@ impl SseDecode for crate::api::poll::OutcomeOut {
             winner_checks_out: var_winnerChecksOut,
             decrypted_by: var_decryptedBy,
             mine: var_mine,
+        };
+    }
+}
+
+impl SseDecode for crate::api::qr::QrArt {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_size = <u32>::sse_decode(deserializer);
+        let mut var_quiet = <u32>::sse_decode(deserializer);
+        let mut var_pieces = <Vec<crate::api::qr::QrPiece>>::sse_decode(deserializer);
+        return crate::api::qr::QrArt {
+            size: var_size,
+            quiet: var_quiet,
+            pieces: var_pieces,
+        };
+    }
+}
+
+impl SseDecode for crate::api::qr::QrPiece {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_kind = <u8>::sse_decode(deserializer);
+        let mut var_x = <u32>::sse_decode(deserializer);
+        let mut var_y = <u32>::sse_decode(deserializer);
+        let mut var_n = <u32>::sse_decode(deserializer);
+        return crate::api::qr::QrPiece {
+            kind: var_kind,
+            x: var_x,
+            y: var_y,
+            n: var_n,
         };
     }
 }
@@ -677,8 +793,8 @@ fn pde_ffi_dispatcher_primary_impl(
         2 => wire__crate__api__poll__cast_ballot_impl(port, ptr, rust_vec_len, data_len),
         3 => wire__crate__api__muzak__compose_muzak_impl(port, ptr, rust_vec_len, data_len),
         5 => wire__crate__api__poll__init_app_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__poll__next_step_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__poll__outcomes_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__poll__next_step_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__poll__outcomes_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -693,9 +809,11 @@ fn pde_ffi_dispatcher_sync_impl(
     match func_id {
         1 => wire__crate__api__poll__calendar_ics_impl(ptr, rust_vec_len, data_len),
         4 => wire__crate__api__poll__identity_public_impl(ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__poll__make_slot_impl(ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__poll__new_identity_impl(ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__poll__slot_times_impl(ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__qr__join_link_impl(ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__poll__make_slot_impl(ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__poll__new_identity_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__qr__qr_art_impl(ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__poll__slot_times_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -759,6 +877,41 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::poll::OutcomeOut>
     for crate::api::poll::OutcomeOut
 {
     fn into_into_dart(self) -> crate::api::poll::OutcomeOut {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::qr::QrArt {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.size.into_into_dart().into_dart(),
+            self.quiet.into_into_dart().into_dart(),
+            self.pieces.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::qr::QrArt {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::qr::QrArt> for crate::api::qr::QrArt {
+    fn into_into_dart(self) -> crate::api::qr::QrArt {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::qr::QrPiece {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.kind.into_into_dart().into_dart(),
+            self.x.into_into_dart().into_dart(),
+            self.y.into_into_dart().into_dart(),
+            self.n.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::qr::QrPiece {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::qr::QrPiece> for crate::api::qr::QrPiece {
+    fn into_into_dart(self) -> crate::api::qr::QrPiece {
         self
     }
 }
@@ -912,6 +1065,16 @@ impl SseEncode for Vec<u8> {
     }
 }
 
+impl SseEncode for Vec<crate::api::qr::QrPiece> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::qr::QrPiece>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::poll::RowOut> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -946,6 +1109,16 @@ impl SseEncode for Option<bool> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <bool>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::qr::QrArt> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::qr::QrArt>::sse_encode(value, serializer);
         }
     }
 }
@@ -991,6 +1164,25 @@ impl SseEncode for crate::api::poll::OutcomeOut {
         <bool>::sse_encode(self.winner_checks_out, serializer);
         <Vec<String>>::sse_encode(self.decrypted_by, serializer);
         <Option<bool>>::sse_encode(self.mine, serializer);
+    }
+}
+
+impl SseEncode for crate::api::qr::QrArt {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.size, serializer);
+        <u32>::sse_encode(self.quiet, serializer);
+        <Vec<crate::api::qr::QrPiece>>::sse_encode(self.pieces, serializer);
+    }
+}
+
+impl SseEncode for crate::api::qr::QrPiece {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u8>::sse_encode(self.kind, serializer);
+        <u32>::sse_encode(self.x, serializer);
+        <u32>::sse_encode(self.y, serializer);
+        <u32>::sse_encode(self.n, serializer);
     }
 }
 

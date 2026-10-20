@@ -8,7 +8,9 @@ description = "Messages between the whisperpoll server and its clients, and the 
 whisperpoll-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
 rand_core = "0.6"
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
+rqrr = "0.10"
 serde_json = "1"
 rand_core = { version = "0.6", features = ["getrandom"] }

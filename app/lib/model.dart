@@ -101,6 +101,10 @@ class PollView {
           ((i as Map)['name'] as String, i['token'] as String)
       ];
 
+  /// The open invite's code (the QR code), for the creator while people can
+  /// still join.
+  String? get joinCode => json['join_code'] as String?;
+
   /// Suggested slots, earliest first, as (canonical slot text, suggested by).
   List<(String, String)> get slots => [
         for (final d in json['slots'] as List) ((d as Map)['slot'] as String, d['by'] as String)

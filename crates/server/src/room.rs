@@ -14,8 +14,8 @@ use whisperpoll_core::{
 };
 use whisperpoll_protocol::slot::Slot;
 use whisperpoll_protocol::{
-    round_winner, CeremonyView, ClientMsg, InviteLink, ParticipantView, Phase, PollSummary,
-    PollView, RoundView, SlotSuggestion, BALLOT_KIND,
+    round_winner, CeremonyView, ClientMsg, Invitation, InviteLink, ParticipantView, Phase,
+    PollSummary, PollView, RoundView, SlotSuggestion, BALLOT_KIND,
 };
 
 const MAX_NAME: usize = 40;
@@ -101,6 +101,10 @@ pub struct Room {
     rounds: Vec<Round>,
     /// Every ballot ever accepted, so none can be replayed in a later round.
     used: HashSet<Receipt>,
+    /// The open invite (QR code): anyone with it can join under their own
+    /// name. Polls stored before it existed get one when loaded.
+    #[serde(default = "random_token")]
+    join_code: String,
 }
 
 pub fn random_token() -> String {
@@ -143,6 +147,7 @@ impl Room {
             poll: None,
             rounds: Vec::new(),
             used: HashSet::new(),
+            join_code: random_token(),
         };
         Ok((room, token))
     }
@@ -187,6 +192,11 @@ impl Room {
         match msg {
             ClientMsg::Register(reg) => self.register(who, reg),
             ClientMsg::Invite { name } => self.invite(who, &name),
+            ClientMsg::NewJoinCode => {
+                self.require_creator(who)?;
+                self.join_code = random_token();
+                Ok(())
+            }
             ClientMsg::SuggestSlot { slot } => self.suggest_slot(who, &slot),
             ClientMsg::StartCeremony { threshold, days } => {
                 self.start_ceremony(who, threshold, days)
@@ -282,10 +292,36 @@ impl Room {
 
     fn invite(&mut self, who: usize, name: &str) -> Result<(), String> {
         self.require_creator(who)?;
-        if !matches!(
+        self.add_member(name).map(|_| ())
+    }
+
+    fn invites_open(&self) -> bool {
+        matches!(
             self.phase,
             Phase::Inviting | Phase::Gathering | Phase::Voting
-        ) {
+        )
+    }
+
+    /// What the open invite `code` is for, if it's this poll's and people
+    /// can still join.
+    pub fn invitation(&self, code: &str) -> Option<Invitation> {
+        (self.invites_open() && code == self.join_code).then(|| Invitation {
+            title: self.title.clone(),
+            from: self.members[0].name.clone(),
+        })
+    }
+
+    /// Joins through the open invite under `name`; returns the new
+    /// participant's token.
+    pub fn join(&mut self, code: &str, name: &str) -> Result<String, String> {
+        if code != self.join_code {
+            return Err("this invite code is no longer valid".into());
+        }
+        self.add_member(name)
+    }
+
+    fn add_member(&mut self, name: &str) -> Result<String, String> {
+        if !self.invites_open() {
             return Err("invites are closed".into());
         }
         if self.members.len() >= MAX_PARTICIPANTS {
@@ -297,17 +333,20 @@ impl Room {
             .iter()
             .any(|m| m.name.eq_ignore_ascii_case(&name))
         {
-            return Err(format!("{name} is already invited"));
+            return Err(format!(
+                "someone called {name} is already in this poll; pick another name"
+            ));
         }
+        let token = random_token();
         self.members.push(Member {
             name,
-            token: random_token(),
+            token: token.clone(),
             creator: false,
             registration: None,
             devices: Vec::new(),
             notified: None,
         });
-        Ok(())
+        Ok(token)
     }
 
     fn suggest_slot(&mut self, who: usize, slot: &str) -> Result<(), String> {
@@ -670,6 +709,7 @@ impl Room {
             } else {
                 Vec::new()
             },
+            join_code: (creator && self.invites_open()).then(|| self.join_code.clone()),
             slots: self.slots.clone(),
             ceremony: self.key.as_ref().map(|k| CeremonyView {
                 attempt: k.attempt,
@@ -1111,5 +1151,46 @@ mod tests {
         assert!(room.apply(0, start(2)).is_err());
         assert!(room.apply(0, start(0)).is_err());
         room.apply(0, start(1)).unwrap();
+    }
+
+    #[test]
+    fn the_open_invite_lets_people_join_under_their_own_name() {
+        let (mut room, _) = Room::new("p1".into(), "Dinner", "alice").unwrap();
+        let code = room.view(0, &Online::new()).join_code.unwrap();
+        assert_eq!(
+            room.invitation(&code),
+            Some(Invitation {
+                title: "Dinner".into(),
+                from: "alice".into()
+            })
+        );
+        assert_eq!(room.invitation("nope"), None);
+        // Only the creator sees the code.
+        let token = room.join(&code, "  carol ").unwrap();
+        let carol = room.member_by_token(&token).unwrap();
+        assert_eq!(
+            room.view(carol, &Online::new()).participants[carol].name,
+            "carol"
+        );
+        assert_eq!(room.view(carol, &Online::new()).join_code, None);
+        assert!(room.join(&code, "Carol").is_err(), "names stay unique");
+        assert!(room.join("nope", "dave").is_err());
+
+        // A new code retires the old QR.
+        assert!(room.apply(carol, ClientMsg::NewJoinCode).is_err());
+        room.apply(0, ClientMsg::NewJoinCode).unwrap();
+        assert!(room.join(&code, "dave").is_err());
+        let fresh = room.view(0, &Online::new()).join_code.unwrap();
+        room.join(&fresh, "dave").unwrap();
+    }
+
+    #[test]
+    fn the_open_invite_closes_with_the_vote() {
+        let (mut room, _) = setup(1);
+        let code = room.join_code.clone();
+        room.phase = Phase::Done;
+        assert_eq!(room.invitation(&code), None);
+        assert!(room.join(&code, "zed").is_err());
+        assert_eq!(room.view(0, &Online::new()).join_code, None);
     }
 }

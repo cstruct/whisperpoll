@@ -5,6 +5,7 @@ mod auto;
 mod deco;
 mod history;
 mod home;
+mod join;
 mod muzak;
 mod net;
 mod poll_page;
@@ -26,6 +27,16 @@ fn App() -> impl IntoView {
     let token = web_sys::UrlSearchParams::new_with_str(&search)
         .ok()
         .and_then(|p| p.get("t"));
+    let code = web_sys::UrlSearchParams::new_with_str(&search)
+        .ok()
+        .and_then(|p| p.get("c"));
+    if let (Some(id), Some(code)) = (path.strip_prefix("/j/"), code) {
+        return view! {
+            <join::JoinPage id=id.to_string() code=code />
+            <muzak::MuzakButton />
+        }
+        .into_any();
+    }
     let page = match (path.strip_prefix("/p/"), token) {
         (Some(id), Some(token)) if !id.is_empty() => {
             view! { <poll_page::PollPage id=id.to_string() token=token /> }.into_any()
@@ -37,4 +48,5 @@ fn App() -> impl IntoView {
         {page}
         <muzak::MuzakButton />
     }
+    .into_any()
 }

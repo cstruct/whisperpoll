@@ -67,6 +67,39 @@ class Invite {
       );
 }
 
+/// An open invite (the QR code): `https://host/j/<poll>?c=<code>`, or the
+/// app's own `whisperpoll://j/<poll>?c=<code>&server=<https://host>`. Whoever
+/// has it joins under a name of their own.
+class JoinLink {
+  JoinLink({required this.server, required this.poll, required this.code});
+
+  final String server;
+  final String poll;
+  final String code;
+
+  Uri get invitationUrl =>
+      Uri.parse('$server/api/polls/$poll/invitation').replace(queryParameters: {'c': code});
+
+  Uri get joinUrl => Uri.parse('$server/api/polls/$poll/join');
+
+  static JoinLink? parse(String text) {
+    final uri = Uri.tryParse(text.trim());
+    if (uri == null) return null;
+    final code = uri.queryParameters['c'];
+    if (code == null || code.isEmpty) return null;
+    if (uri.scheme == 'whisperpoll') {
+      final server = uri.queryParameters['server'];
+      final poll = uri.pathSegments.firstOrNull;
+      if (uri.host != 'j' || server == null || poll == null) return null;
+      return JoinLink(server: server, poll: poll, code: code);
+    }
+    if (uri.scheme != 'https' && uri.scheme != 'http') return null;
+    final segments = uri.pathSegments;
+    if (segments.length != 2 || segments[0] != 'j') return null;
+    return JoinLink(server: uri.origin, poll: segments[1], code: code);
+  }
+}
+
 /// The start time and duration last used when suggesting a slot.
 class SlotDefaults {
   static Future<(TimeOfDay, int)> load() async {

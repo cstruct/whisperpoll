@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'calendar.dart';
 import 'connection.dart';
+import 'join.dart';
 import 'maxi.dart';
 import 'muzak.dart';
 import 'model.dart';
@@ -637,6 +638,14 @@ class _InvitesState extends State<_Invites> {
                   ));
                 },
               ),
+            ),
+          if (s.view.joinCode case final code?)
+            OpenInvite(
+              server: s.invite.server,
+              poll: s.view.id,
+              code: code,
+              title: s.view.title,
+              onNewCode: () => s.conn.send('NewJoinCode'),
             ),
         ],
       ),
