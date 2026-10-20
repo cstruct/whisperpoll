@@ -1,0 +1,7 @@
+[package]
+name = "whisperpoll-muzak"
+version = "0.1.0"
+edition = "2021"
+description = "Procedurally generated lounge muzak, General MIDI style, for the clients' waiting music"
+
+[dependencies]

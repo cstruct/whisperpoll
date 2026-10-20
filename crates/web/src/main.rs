@@ -5,6 +5,7 @@ mod auto;
 mod deco;
 mod history;
 mod home;
+mod muzak;
 mod net;
 mod poll_page;
 mod store;
@@ -25,11 +26,15 @@ fn App() -> impl IntoView {
     let token = web_sys::UrlSearchParams::new_with_str(&search)
         .ok()
         .and_then(|p| p.get("t"));
-    match (path.strip_prefix("/p/"), token) {
+    let page = match (path.strip_prefix("/p/"), token) {
         (Some(id), Some(token)) if !id.is_empty() => {
             view! { <poll_page::PollPage id=id.to_string() token=token /> }.into_any()
         }
         _ if path == "/history" => view! { <history::History /> }.into_any(),
         _ => view! { <home::Home /> }.into_any(),
+    };
+    view! {
+        {page}
+        <muzak::MuzakButton />
     }
 }

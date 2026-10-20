@@ -11,6 +11,14 @@ the server) and a result anyone can check.
   never holds a key. Polls live in Redis (or in memory without one).
 - `crates/web`: the Leptos (CSR) client. All cryptography runs in the
   browser.
+- `crates/muzak`: procedurally generated lounge muzak, synthesized from a
+  seed (no samples), played while you wait by both clients. Mute it with
+  the spinning record. To listen to one piece:
+  `cargo run -p whisperpoll-muzak --example render -- 42 /tmp/m.wav && afplay /tmp/m.wav`
+
+Fonts (Bungee, Space Grotesk, VT323) are bundled in `crates/web/fonts` and
+`app/fonts` under the SIL Open Font License, so no page loads anything from
+Google.
 
 ## Running
 

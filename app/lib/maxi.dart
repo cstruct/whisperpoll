@@ -6,7 +6,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 abstract final class Maxi {
   static const night = Color(0xFF1A0B3B);
@@ -22,11 +21,12 @@ abstract final class Maxi {
   static const ok = Color(0xFF08561A);
   static const bad = Color(0xFF9C0019);
 
+  // Bundled fonts (app/fonts).
   static TextStyle display([double size = 18, Color? color]) =>
-      GoogleFonts.bungee(fontSize: size, color: color, height: 1.1);
+      TextStyle(fontFamily: 'Bungee', fontSize: size, color: color, height: 1.1);
 
   static TextStyle pixel([double size = 22, Color? color]) =>
-      GoogleFonts.vt323(fontSize: size, color: color, height: 1.0);
+      TextStyle(fontFamily: 'VT323', fontSize: size, color: color, height: 1.0);
 
   /// The poll title: two offset shadows, pink and cyan.
   static TextStyle chroma([double size = 30]) => display(size, paper).copyWith(shadows: const [
@@ -55,13 +55,13 @@ abstract final class Maxi {
       onPrimaryContainer: ink,
       outline: ink,
     );
-    final text = GoogleFonts.spaceGroteskTextTheme(ThemeData.dark().textTheme)
-        .apply(bodyColor: paper, displayColor: paper);
+    final text = ThemeData.dark().textTheme.apply(fontFamily: 'SpaceGrotesk', bodyColor: paper, displayColor: paper);
     const square = RoundedRectangleBorder(borderRadius: BorderRadius.zero);
     const border = BorderSide(color: ink, width: 3);
     final label = display(13);
     return ThemeData(
       useMaterial3: true,
+      fontFamily: 'SpaceGrotesk',
       colorScheme: scheme,
       scaffoldBackgroundColor: night,
       textTheme: text,

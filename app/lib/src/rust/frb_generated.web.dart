@@ -6,6 +6,7 @@
 // Static analysis wrongly picks the IO variant, thus ignore this
 // ignore_for_file: argument_type_not_assignable
 
+import 'api/muzak.dart';
 import 'api/poll.dart';
 
 import 'dart:async';
@@ -70,6 +71,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<RowOut> dco_decode_list_row_out(dynamic raw);
+
+  @protected
+  MuzakPiece dco_decode_muzak_piece(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -154,6 +158,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<RowOut> sse_decode_list_row_out(SseDeserializer deserializer);
+
+  @protected
+  MuzakPiece sse_decode_muzak_piece(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -255,6 +262,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_row_out(List<RowOut> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_muzak_piece(MuzakPiece self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

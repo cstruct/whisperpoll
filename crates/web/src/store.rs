@@ -71,6 +71,17 @@ pub fn forget(id: &str, token: &str) {
     save_visited(&polls);
 }
 
+const MUZAK: &str = "whisperpoll:muzak";
+
+/// Whether the waiting music is muted (it plays unless muted).
+pub fn muzak_muted() -> bool {
+    get(MUZAK).as_deref() == Some("off")
+}
+
+pub fn set_muzak_muted(muted: bool) {
+    set(MUZAK, if muted { "off" } else { "on" });
+}
+
 /// This participant's trustee identity, created on first use.
 pub fn identity(poll: &str, token: &str) -> TrusteeIdentity {
     let k = key(poll, token, "identity");

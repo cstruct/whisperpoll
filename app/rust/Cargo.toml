@@ -10,6 +10,7 @@ crate-type = ["cdylib", "staticlib"]
 flutter_rust_bridge = "=2.13.0"
 whisperpoll-core = { path = "../../crates/core" }
 whisperpoll-protocol = { path = "../../crates/protocol" }
+whisperpoll-muzak = { path = "../../crates/muzak" }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde_json = "1"
 

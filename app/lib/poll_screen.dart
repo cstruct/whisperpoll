@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 import 'calendar.dart';
 import 'connection.dart';
 import 'maxi.dart';
+import 'muzak.dart';
 import 'model.dart';
 import 'src/rust/api/poll.dart' as rust;
 import 'storage.dart';
@@ -97,6 +98,7 @@ class _PollScreenState extends State<PollScreen> {
       appBar: AppBar(
         title: const FittedBox(fit: BoxFit.scaleDown, child: Text('~*~ whisperpoll ~*~')),
         actions: [
+          const MuzakButton(),
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: Sticker(

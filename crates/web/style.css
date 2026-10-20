@@ -2,6 +2,42 @@
    loud flat colors, black outlines with hard shadows, zigzag cards and
    things that spin, bob and blink (unless reduced motion is asked for). */
 
+/* Fonts are served from here (crates/web/fonts, OFL licensed), not Google. */
+@font-face {
+  font-family: "Bungee";
+  src: url("/fonts/bungee-latin-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "VT323";
+  src: url("/fonts/vt323-latin-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("/fonts/space-grotesk-latin-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("/fonts/space-grotesk-latin-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("/fonts/space-grotesk-latin-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
   --night: #1a0b3b;
   --ink: #000;
@@ -489,6 +525,56 @@ progress::-moz-progress-bar {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* The muzak button: a record that spins while it plays. */
+
+.muzak {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 10;
+  max-width: min(260px, calc(100vw - 28px));
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 12px 6px 8px;
+  background: var(--lime);
+  color: var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  transform: rotate(-2deg);
+  text-align: left;
+}
+
+.muzak:hover:not(:disabled) {
+  transform: rotate(-2deg) translate(-2px, -2px);
+  box-shadow: 6px 6px 0 var(--ink);
+}
+
+.muzak.off {
+  background: var(--paper);
+}
+
+.muzak svg {
+  color: var(--lime);
+}
+
+.muzak-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 0.7rem;
+}
+
+.muzak-title {
+  font: 1rem/1 var(--pixel);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Room for the muzak button below the badges. */
+.badges {
+  padding-bottom: 72px;
 }
 
 /* Home */

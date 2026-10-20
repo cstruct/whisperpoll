@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import 'maxi.dart';
+import 'muzak.dart';
 import 'model.dart';
 import 'poll_screen.dart' show prettySlot;
 import 'storage.dart';
@@ -194,7 +195,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget build(BuildContext context) {
     final polls = _polls;
     return Scaffold(
-      appBar: AppBar(title: const Text('~*~ your polls ~*~')),
+      appBar: AppBar(
+        title: const Text('~*~ your polls ~*~'),
+        actions: const [MuzakButton(), SizedBox(width: 8)],
+      ),
       body: Starfield(
         child: Column(children: [
           const Ticker("Every poll you've joined on this phone ★ kept for a week after the last change"),

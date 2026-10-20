@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'home_screen.dart';
 import 'maxi.dart';
+import 'muzak.dart';
 import 'poll_screen.dart';
 import 'push.dart';
 import 'src/rust/frb_generated.dart';
@@ -15,6 +16,7 @@ Future<void> main() async {
   await RustLib.init();
   // Before anything else: a background wake-up may be why the app launched.
   await PushService.init();
+  await Muzak.instance.init();
   runApp(const WhisperpollApp());
 }
 

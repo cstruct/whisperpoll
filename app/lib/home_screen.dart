@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'history.dart';
 import 'maxi.dart';
+import 'muzak.dart';
 import 'storage.dart';
 
 const defaultServer = 'https://whisperpoll.fly.dev';
@@ -105,7 +106,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final polls = _polls;
     final running = [for (final p in polls ?? <(Invite, PollStatus)>[]) if (p.$2.running) p];
     return Scaffold(
-      appBar: AppBar(title: const Text('~*~ whisperpoll ~*~')),
+      appBar: AppBar(
+        title: const Text('~*~ whisperpoll ~*~'),
+        actions: const [MuzakButton(), SizedBox(width: 8)],
+      ),
       body: Starfield(
         child: Column(children: [
           const Ticker('Votes nobody can read ★ not even the server ★ a result everyone can check'),

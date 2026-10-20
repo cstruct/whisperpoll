@@ -1,5 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/protocol", "crates/server", "crates/web", "app/rust"]
+members = ["crates/core", "crates/protocol", "crates/muzak", "crates/server", "crates/web", "app/rust"]
 # The web client only builds for wasm32 (via trunk), so plain `cargo test` skips it.
-default-members = ["crates/core", "crates/protocol", "crates/server"]
+default-members = ["crates/core", "crates/protocol", "crates/muzak", "crates/server"]
+
+# Synthesizing audio at debug speed takes seconds; the clients render it on
+# the fly, so the composer is optimized even in dev builds.
+[profile.dev.package.whisperpoll-muzak]
+opt-level = 3

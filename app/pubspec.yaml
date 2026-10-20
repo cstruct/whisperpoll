@@ -45,7 +45,7 @@ dependencies:
   path_provider: ^2.1.6
   app_links: ^7.2.2
   intl: ^0.20.3
-  google_fonts: ^6.3.3
+  audioplayers: ^6.8.1
 
 dev_dependencies:
   flutter_test:
@@ -70,6 +70,22 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Bundled, OFL licensed (see fonts/OFL-*.txt).
+  fonts:
+    - family: Bungee
+      fonts:
+        - asset: fonts/Bungee-Regular.ttf
+    - family: VT323
+      fonts:
+        - asset: fonts/VT323-Regular.ttf
+    - family: SpaceGrotesk
+      fonts:
+        - asset: fonts/SpaceGrotesk-Regular.ttf
+        - asset: fonts/SpaceGrotesk-Medium.ttf
+          weight: 500
+        - asset: fonts/SpaceGrotesk-Bold.ttf
+          weight: 700
 
   # To add assets to your application, add an assets section, like this:
   # assets:

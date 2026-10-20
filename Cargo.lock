@@ -1811,6 +1811,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde_json",
  "whisperpoll-core",
+ "whisperpoll-muzak",
  "whisperpoll-protocol",
 ]
 
@@ -2650,6 +2651,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "whisperpoll-muzak"
+version = "0.1.0"
+
+[[package]]
 name = "whisperpoll-protocol"
 version = "0.1.0"
 dependencies = [
@@ -2690,6 +2695,7 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "whisperpoll-core",
+ "whisperpoll-muzak",
  "whisperpoll-protocol",
 ]
 
