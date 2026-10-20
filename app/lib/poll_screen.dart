@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'calendar.dart';
 import 'connection.dart';
+import 'maxi.dart';
 import 'model.dart';
 import 'src/rust/api/poll.dart' as rust;
 import 'storage.dart';
@@ -92,28 +93,38 @@ class _PollScreenState extends State<PollScreen> {
   @override
   Widget build(BuildContext context) {
     final view = _conn.view;
-    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(view?.title ?? widget.invite.title ?? 'Poll'),
+        title: const FittedBox(fit: BoxFit.scaleDown, child: Text('~*~ whisperpoll ~*~')),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16),
-            child: Row(children: [
-              Icon(Icons.circle, size: 10, color: _conn.connected ? Colors.green : theme.disabledColor),
-              const SizedBox(width: 6),
-              Text(_conn.gone
-                  ? 'Offline'
-                  : view == null
-                      ? 'Connecting'
-                      : "You're ${view.mine.name}"),
-            ]),
+            child: Sticker(
+              tilt: 3,
+              shadow: 3,
+              border: 2,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                StatusDot(online: _conn.connected, onColor: const Color(0xFF1FBF3A)),
+                const SizedBox(width: 6),
+                Text(
+                  _conn.gone
+                      ? 'Offline'
+                      : view == null
+                          ? 'Connecting'
+                          : "You're ${view.mine.name}",
+                  style: Maxi.display(11, Maxi.ink),
+                ),
+              ]),
+            ),
           ),
         ],
       ),
-      body: ListenableBuilder(
-        listenable: _conn,
-        builder: (context, _) => _body(context, view),
+      body: Starfield(
+        child: ListenableBuilder(
+          listenable: _conn,
+          builder: (context, _) => _body(context, view),
+        ),
       ),
     );
   }
@@ -127,12 +138,30 @@ class _PollScreenState extends State<PollScreen> {
               'so they are lost whenever the server restarts or is updated.',
         );
       }
-      return const Center(child: CircularProgressIndicator());
+      return Center(child: Text('Connecting…', style: Maxi.pixel(28, Maxi.lime)));
     }
     final s = _Ctx(conn: _conn, view: view, invite: widget.invite);
+    final ticker = switch (view.phase) {
+      Phase.inviting => 'Everyone gets their own link ★ send it privately ★ next up: suggest times',
+      Phase.gathering => 'Anyone can add a time ★ the list locks when voting opens',
+      Phase.keyCeremony => 'Building a key nobody holds alone ★ hang tight',
+      Phase.voting => 'Your ballot is encrypted before it leaves ★ nobody can read it ★ not even the server',
+      Phase.tallying => 'Only the total gets decrypted ★ almost there',
+      Phase.done => 'We have a result ★ checked on this phone ★ proofs included',
+      Phase.failed => 'Something went wrong',
+    };
+    return Column(children: [
+      Ticker(ticker),
+      Expanded(child: _list(s, view)),
+    ]);
+  }
+
+  Widget _list(_Ctx s, PollView view) {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
+        Text(view.title, style: Maxi.chroma(30)),
+        const SizedBox(height: 18),
         if (_conn.gone)
           const _Banner(
             "The server no longer has this poll (it restarted or was updated), so this page can't "
@@ -151,7 +180,9 @@ class _PollScreenState extends State<PollScreen> {
           Phase.done => [_ResultSummary(s, _outcomes), ..._finishedRounds(s, open: _outcomes.length == 1)],
           Phase.failed => [_Message(title: 'Something went wrong', body: view.failure ?? '')],
         },
+        const SizedBox(height: 6),
         _People(s),
+        const Badges(),
       ],
     );
   }
@@ -185,14 +216,17 @@ class _PollScreenState extends State<PollScreen> {
       _Invites(s),
       _Card(
         title: 'Done inviting?',
+        color: Maxi.yellow,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text('$opened. Next, everyone suggests times that could work; you can still invite people then.'),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () => s.conn.send('FinishInviting'),
-              child: const Text('Next: suggest times'),
+            const SizedBox(height: 14),
+            Pop(
+              child: FilledButton(
+                onPressed: () => s.conn.send('FinishInviting'),
+                child: const _Onward('Next: suggest times'),
+              ),
             ),
           ],
         ),
@@ -207,16 +241,23 @@ class _PollScreenState extends State<PollScreen> {
         if (s.view.isCreator) ...[
           _Start(s),
           // Someone usually gets forgotten.
-          Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: ExpansionTile(
-              title: const Text('Invite more people'),
-              childrenPadding: EdgeInsets.zero,
-              children: [_Invites(s)],
+          Padding(
+            padding: const EdgeInsets.only(bottom: 18, right: 6),
+            child: Sticker(
+              padding: EdgeInsets.zero,
+              shadow: 6,
+              child: Theme(
+                data: Maxi.onLight(Theme.of(context)),
+                child: ExpansionTile(
+                  title: Text('Invite more people', style: Maxi.display(15, Maxi.ink)),
+                  childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                  children: [_Invites(s)],
+                ),
+              ),
             ),
           ),
         ] else
-          _Card(child: Text(
+          _Card(color: Maxi.yellow, child: Text(
             'Waiting for ${s.view.participants.firstWhere((p) => p.creator).name} to lock the times '
             'and open voting.',
           )),
@@ -236,26 +277,29 @@ class _Ctx {
 }
 
 class _Card extends StatelessWidget {
-  const _Card({required this.child, this.title});
+  const _Card({required this.child, this.title, this.color = Maxi.cyan, this.icon});
   final Widget child;
   final String? title;
+  final Color color;
+  final Widget? icon;
 
   @override
-  Widget build(BuildContext context) => Card(
-        margin: const EdgeInsets.only(bottom: 12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (title != null) ...[
-                Text(title!, style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 12),
-              ],
-              child,
-            ],
-          ),
-        ),
+  Widget build(BuildContext context) => ZigCard(title: title, icon: icon, color: color, child: child);
+}
+
+/// A button label with an arrow that nudges forward.
+class _Onward extends StatelessWidget {
+  const _Onward(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(child: Text(label, textAlign: TextAlign.center)),
+          const SizedBox(width: 8),
+          const Animated(Motion.nudge, child: Icon(Icons.arrow_forward, size: 20)),
+        ],
       );
 }
 
@@ -265,12 +309,13 @@ class _Hint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final color = Theme.of(context).colorScheme.onSurfaceVariant;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
-      child: Text(
-        text,
-        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+      padding: const EdgeInsets.fromLTRB(2, 2, 2, 16),
+      child: Container(
+        padding: const EdgeInsets.only(left: 10),
+        decoration: BoxDecoration(border: Border(left: BorderSide(color: color, width: 3))),
+        child: Text(text, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w500)),
       ),
     );
   }
@@ -283,15 +328,17 @@ class _Banner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      color: scheme.errorContainer,
-      margin: const EdgeInsets.only(bottom: 12),
-      child: ListTile(
-        title: Text(text, style: TextStyle(color: scheme.onErrorContainer)),
-        trailing: onDismiss == null
-            ? null
-            : IconButton(icon: const Icon(Icons.close), onPressed: onDismiss),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16, right: 4),
+      child: Sticker(
+        color: Maxi.orange,
+        child: Row(children: [
+          Expanded(
+            child: Text(text, style: const TextStyle(color: Maxi.ink, fontWeight: FontWeight.w700)),
+          ),
+          if (onDismiss != null)
+            IconButton(icon: const Icon(Icons.close, color: Maxi.ink), tooltip: 'Dismiss', onPressed: onDismiss),
+        ]),
       ),
     );
   }
@@ -305,7 +352,7 @@ class _Message extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.all(16),
-        child: _Card(title: title, child: Text(body)),
+        child: _Card(title: title, color: Maxi.orange, child: Text(body)),
       );
 }
 
@@ -322,32 +369,59 @@ class _Steps extends StatelessWidget {
       Phase.keyCeremony || Phase.voting => 2,
       _ => 3,
     };
-    final scheme = Theme.of(context).colorScheme;
-    return Row(
-      children: [
-        for (final (i, label) in ['Invite', 'Times', 'Vote', 'Result'].indexed)
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.only(bottom: 8),
-              margin: const EdgeInsets.only(right: 6),
-              decoration: BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(
-                    width: 3,
-                    color: i == current ? scheme.primary : scheme.outlineVariant,
-                  ),
-                ),
-              ),
-              child: Text(
-                '${i + 1}  $label',
-                style: TextStyle(
-                  fontWeight: i == current ? FontWeight.w600 : FontWeight.normal,
-                  color: i == current ? null : scheme.onSurfaceVariant,
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 14),
+      child: Row(
+        children: [
+          for (final (i, label) in ['Invite', 'Times', 'Vote', 'Result'].indexed)
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(right: i < 3 ? 8 : 0),
+                child: Semantics(
+                  selected: i == current,
+                  child: _StepTab(i + 1, label, done: i < current, now: i == current),
                 ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
+    );
+  }
+}
+
+class _StepTab extends StatelessWidget {
+  const _StepTab(this.n, this.label, {required this.done, required this.now});
+  final int n;
+  final String label;
+  final bool done;
+  final bool now;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = done || now ? Maxi.ink : Maxi.cyan;
+    final tab = Container(
+      height: 60,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: now ? Maxi.lime : done ? Maxi.pink : Colors.transparent,
+        border: Border.all(color: done || now ? Maxi.ink : Maxi.cyan, width: 3),
+        boxShadow: done || now ? Maxi.hard(Maxi.ink, now ? 4 : 3) : null,
+      ),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Text('$n', style: Maxi.display(22, fg)),
+        Text(label.toUpperCase(), style: Maxi.display(9, fg)),
+      ]),
+    );
+    if (!now) return tab;
+    return Transform.rotate(
+      angle: -0.07,
+      child: Transform.scale(
+        scale: 1.06,
+        child: Stack(clipBehavior: Clip.none, children: [
+          tab,
+          const Positioned(top: -14, right: -10, child: SpinningStar()),
+        ]),
+      ),
     );
   }
 }
@@ -423,20 +497,29 @@ class _DatesState extends State<_Dates> {
   Widget build(BuildContext context) {
     final slots = widget.s.view.slots;
     final date = _date;
+    const ticketColors = [Maxi.lime, Maxi.yellow, Maxi.paper];
+    const ticketTilts = [-1.0, 0.8, -0.4];
     return _Card(
       title: 'Suggest times',
+      icon: const Animated(Motion.wiggle, child: Icon(Icons.schedule, size: 30)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text('Anyone can add a time. The list is locked when voting opens.'),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           if (slots.isEmpty) const Text('No times yet.'),
-          for (final (slot, by) in slots)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: Text(prettySlot(slot), style: const TextStyle(fontWeight: FontWeight.w600)),
-              trailing: Text('by $by'),
+          for (final (i, (slot, by)) in slots.indexed)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10, right: 4),
+              child: Sticker(
+                color: ticketColors[i % 3],
+                tilt: ticketTilts[i % 3],
+                padding: const EdgeInsets.fromLTRB(14, 10, 12, 10),
+                child: Row(children: [
+                  Expanded(child: Text(prettySlot(slot), style: const TextStyle(fontWeight: FontWeight.w700))),
+                  Text('by $by', style: const TextStyle(fontSize: 13)),
+                ]),
+              ),
             ),
           const SizedBox(height: 8),
           // Date, start time and duration on one row.
@@ -481,10 +564,13 @@ class _DatesState extends State<_Dates> {
             ],
           ),
           const SizedBox(height: 8),
-          FilledButton.tonalIcon(
-            onPressed: date == null ? null : _add,
-            icon: const Icon(Icons.add),
-            label: const Text('Add time'),
+          const SizedBox(height: 4),
+          Pop(
+            child: FilledButton.icon(
+              onPressed: date == null ? null : _add,
+              icon: const Icon(Icons.add),
+              label: const Text('Add time'),
+            ),
           ),
         ],
       ),
@@ -517,6 +603,7 @@ class _InvitesState extends State<_Invites> {
     final s = widget.s;
     return _Card(
       title: 'Invite people',
+      icon: const Animated(Motion.bob, child: Icon(Icons.mail_outline, size: 30)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -531,12 +618,12 @@ class _InvitesState extends State<_Invites> {
               ),
             ),
             const SizedBox(width: 8),
-            FilledButton.tonal(onPressed: _invite, child: const Text('Create link')),
+            Pop(color: Maxi.ink, child: FilledButton(onPressed: _invite, child: const Text('Create link'))),
           ]),
           for (final (name, token) in s.view.invites)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text(name),
+              title: Text(name, style: Maxi.display(15, Maxi.ink)),
               trailing: IconButton(
                 icon: const Icon(Icons.ios_share),
                 tooltip: 'Share link',
@@ -582,6 +669,7 @@ class _StartState extends State<_Start> {
                 'But $t working together could also read individual ballots.';
     return _Card(
       title: 'Lock times & open voting',
+      color: Maxi.pink,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -615,13 +703,16 @@ class _StartState extends State<_Start> {
             ),
           ]),
           const SizedBox(height: 12),
-          FilledButton(
-            onPressed: dates == 0 || n == 0
-                ? null
-                : () => widget.s.conn.send({
-                      'StartCeremony': {'threshold': t, 'days': days}
-                    }),
-            child: const Text('Lock times & open voting'),
+          Pop(
+            color: Maxi.cyan,
+            child: FilledButton(
+              onPressed: dates == 0 || n == 0
+                  ? null
+                  : () => widget.s.conn.send({
+                        'StartCeremony': {'threshold': t, 'days': days}
+                      }),
+              child: const _Onward('Lock times & open voting'),
+            ),
           ),
         ],
       ),
@@ -669,6 +760,7 @@ class _KeyCeremonyState extends State<_KeyCeremony> {
     ];
     return _Card(
       title: 'Preparing the ballot box',
+      icon: const Animated(Motion.spin, child: Icon(Icons.key, size: 28)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -679,7 +771,7 @@ class _KeyCeremonyState extends State<_KeyCeremony> {
           for (final p in waiting)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.circle, size: 10, color: view.participants[p].online ? Colors.green : null),
+              leading: StatusDot(online: view.participants[p].online),
               title: Text(view.participants[p].name),
               subtitle: Text(p == view.me
                   ? 'you — keep the app open'
@@ -763,6 +855,8 @@ class _VotingState extends State<_Voting> {
     } else if (mine.voted) {
       body = _Card(
         title: view.days > 1 ? "You're set for meeting $_round" : 'Your vote is in',
+        color: Maxi.lime,
+        icon: const Animated(Motion.bob, child: Icon(Icons.check_box_outlined, size: 30)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -802,12 +896,17 @@ class _VotingState extends State<_Voting> {
       children: [
         body,
         _Card(
+          color: Maxi.yellow,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Ready: $ready of ${voters.length}'),
-              const SizedBox(height: 8),
-              LinearProgressIndicator(value: voters.isEmpty ? 0 : ready / voters.length),
+              Row(children: [
+                const Expanded(child: Text('Ballots in', style: TextStyle(fontWeight: FontWeight.w700))),
+                Lcd('$ready/${voters.length}'),
+              ]),
+              const SizedBox(height: 10),
+              _Meter(voters.isEmpty ? 0 : ready / voters.length),
+              const SizedBox(height: 10),
               _Hint(_round > 1
                   ? 'Voting closes by itself once everyone has kept or updated their vote.'
                   : 'Voting closes by itself once everyone has voted.'),
@@ -828,6 +927,7 @@ class _VotingState extends State<_Voting> {
       title: view.days > 1
           ? 'Meeting $_round of ${view.days}: how well does each time work for you?'
           : 'How well does each time work for you?',
+      icon: const Animated(Motion.pulse, child: Icon(Icons.lock, size: 30)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -837,35 +937,38 @@ class _VotingState extends State<_Voting> {
           ),
           for (final (i, date) in view.options.indexed)
             Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(prettySlot(date), style: const TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 6),
-                  if (view.picked.contains(i))
-                    Text('Picked for meeting ${view.picked.indexOf(i) + 1}')
-                  else
-                    SegmentedButton<int>(
-                      showSelectedIcon: false,
-                      segments: [
-                        for (final (t, label) in tiers.indexed)
-                          ButtonSegment(value: t, label: Text(label)),
-                        const ButtonSegment(value: -1, label: Text("Can't")),
-                      ],
-                      selected: {_choices[i] ?? -1},
-                      onSelectionChanged: (v) => setState(() {
-                        final t = v.first;
-                        _choices[i] = t < 0 ? null : t;
-                      }),
-                    ),
-                ],
+              padding: const EdgeInsets.only(top: 14, right: 4),
+              child: Opacity(
+                opacity: view.picked.contains(i) ? 0.55 : 1,
+                child: Sticker(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(prettySlot(date).toUpperCase(), style: Maxi.display(14, Maxi.ink)),
+                      const SizedBox(height: 10),
+                      if (view.picked.contains(i))
+                        Text('Picked for meeting ${view.picked.indexOf(i) + 1}')
+                      else
+                        _TierPicker(
+                          value: _choices[i],
+                          onChanged: (t) => setState(() => _choices[i] = t),
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: _busy ? null : _cast,
-            child: const Text('Cast encrypted vote'),
+          const SizedBox(height: 18),
+          Pop(
+            child: FilledButton(
+              onPressed: _busy ? null : _cast,
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Animated(Motion.wiggle, child: Icon(Icons.lock_outline, size: 20)),
+                SizedBox(width: 8),
+                Text('Cast encrypted vote'),
+              ]),
+            ),
           ),
           if (_editing)
             TextButton(
@@ -876,6 +979,77 @@ class _VotingState extends State<_Voting> {
       ),
     );
   }
+}
+
+/// Prefer / OK / If needed / Can't, one color each; the pick tilts.
+class _TierPicker extends StatelessWidget {
+  const _TierPicker({required this.value, required this.onChanged});
+  final int? value;
+  final ValueChanged<int?> onChanged;
+
+  static const _colors = [Maxi.lime, Maxi.pink, Maxi.yellow];
+
+  @override
+  Widget build(BuildContext context) {
+    final options = [for (final (t, label) in tiers.indexed) (t as int?, label), (null, "Can't")];
+    return Row(children: [
+      for (final (k, (t, label)) in options.indexed) ...[
+        if (k > 0) const SizedBox(width: 6),
+        Expanded(
+          child: Semantics(
+            button: true,
+            selected: value == t,
+            child: GestureDetector(
+              onTap: () => onChanged(t),
+              child: Transform.rotate(
+                angle: value == t ? -0.05 : 0,
+                child: Container(
+                  height: 46,
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  decoration: BoxDecoration(
+                    color: value == t ? (t == null ? Maxi.orange : _colors[t]) : Maxi.paper,
+                    border: Border.all(color: Maxi.ink, width: 3),
+                    boxShadow: value == t ? Maxi.hard(Maxi.ink, 3) : null,
+                  ),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Maxi.ink,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        decoration: value == t && t == null ? TextDecoration.lineThrough : null,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ]);
+  }
+}
+
+/// A striped progress bar in a black frame.
+class _Meter extends StatelessWidget {
+  const _Meter(this.value);
+  final double value;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: 22,
+        decoration: BoxDecoration(color: Maxi.paper, border: Border.all(color: Maxi.ink, width: 3)),
+        child: FractionallySizedBox(
+          alignment: Alignment.centerLeft,
+          widthFactor: value.clamp(0, 1),
+          child: const ColoredBox(color: Maxi.pink),
+        ),
+      );
 }
 
 class _Tallying extends StatelessWidget {
@@ -889,6 +1063,7 @@ class _Tallying extends StatelessWidget {
     final needed = view.ceremony?.threshold ?? 0;
     return _Card(
       title: view.days > 1 ? 'Revealing meeting ${view.rounds.length} of ${view.days}' : 'Revealing the result',
+      icon: const Animated(Motion.spin, child: Icon(Icons.key, size: 28)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -897,9 +1072,12 @@ class _Tallying extends StatelessWidget {
             'prove they did it honestly.',
           ),
           const SizedBox(height: 12),
-          Text('Trustees: $done of $needed needed'),
-          const SizedBox(height: 8),
-          LinearProgressIndicator(value: needed == 0 ? 0 : done / needed),
+          Row(children: [
+            const Expanded(child: Text('Trustees done', style: TextStyle(fontWeight: FontWeight.w700))),
+            Lcd('$done/$needed'),
+          ]),
+          const SizedBox(height: 10),
+          _Meter(needed == 0 ? 0 : done / needed),
         ],
       ),
     );
@@ -983,28 +1161,40 @@ class _ResultSummaryState extends State<_ResultSummary> {
   @override
   Widget build(BuildContext context) {
     final outcomes = widget.outcomes;
-    if (outcomes.isEmpty) return const Center(child: CircularProgressIndicator());
-    final theme = Theme.of(context);
+    if (outcomes.isEmpty) {
+      return Center(child: Text('Checking the result…', style: Maxi.pixel(26, Maxi.lime)));
+    }
     final picked = _picked;
     final days = widget.s.view.days;
     final inCalendar = picked.isNotEmpty && picked.every((o) => _added.contains(o.winnerSlot));
-    return Card(
-      color: theme.colorScheme.primaryContainer,
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+    final big = Maxi.display(24, Maxi.ink);
+    return ZigCard(
+      color: Maxi.lime,
+      child: Stack(clipBehavior: Clip.none, children: [
+        if (picked.isNotEmpty) const Positioned(top: -8, right: -4, child: Starburst(size: 76)),
+        Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (days == 1 && picked.isNotEmpty) ...[
-              const Text('Best time'),
-              Text(prettySlot(picked.first.winnerSlot!), style: theme.textTheme.headlineSmall),
-              Text('${picked.first.winnerAvailable} of ${picked.first.ballots} can make it'),
+              const Tag('Best time!!', textColor: Maxi.lime, tilt: -4),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.only(right: 80),
+                child: Text(prettySlot(picked.first.winnerSlot!).toUpperCase(), style: big),
+              ),
+              const SizedBox(height: 4),
+              Text('${picked.first.winnerAvailable} of ${picked.first.ballots} can make it',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
             ] else if (picked.isEmpty) ...[
-              Text('No time works', style: theme.textTheme.headlineSmall),
+              Text('No time works', style: big),
               const Text('Nobody can make any of the suggested times.'),
             ] else ...[
-              Text('Found ${picked.length} of $days meetings'),
+              const Tag('Results!!', textColor: Maxi.lime, tilt: -4),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.only(right: 80),
+                child: Text('Found ${picked.length} of $days meetings', style: big),
+              ),
               for (final (i, o) in outcomes.indexed)
                 Text(o.winnerSlot == null
                     ? '${i + 1}. No remaining time works for anyone, so the search stopped here.'
@@ -1018,28 +1208,36 @@ class _ResultSummaryState extends State<_ResultSummary> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   if (inCalendar)
-                    FilledButton.tonalIcon(
-                      onPressed: () => DeviceCalendar.open(picked.first.winnerSlot!),
-                      icon: const Icon(Icons.event_available),
-                      label: const Text('In your calendar'),
+                    Pop(
+                      color: Maxi.ink,
+                      child: OutlinedButton.icon(
+                        onPressed: () => DeviceCalendar.open(picked.first.winnerSlot!),
+                        icon: const Icon(Icons.event_available),
+                        label: const Text('In your calendar'),
+                      ),
                     )
                   else
-                    FilledButton.icon(
-                      onPressed: _busy ? null : _addToCalendar,
-                      icon: const Icon(Icons.event),
-                      label: Text(picked.length == 1 ? 'Add to calendar' : 'Add all ${picked.length} to calendar'),
+                    Pop(
+                      child: FilledButton.icon(
+                        onPressed: _busy ? null : _addToCalendar,
+                        icon: const Animated(Motion.bob, child: Icon(Icons.event)),
+                        label: Text(picked.length == 1 ? 'Add to calendar' : 'Add all ${picked.length} to calendar'),
+                      ),
                     ),
-                  TextButton.icon(
-                    onPressed: _shareIcs,
-                    icon: const Icon(Icons.ios_share, size: 18),
-                    label: const Text('Share .ics'),
+                  Pop(
+                    color: Maxi.ink,
+                    child: OutlinedButton.icon(
+                      onPressed: _shareIcs,
+                      icon: const Icon(Icons.ios_share, size: 18),
+                      label: const Text('Share .ics'),
+                    ),
                   ),
                 ],
               ),
             ],
           ],
         ),
-      ),
+      ]),
     );
   }
 }
@@ -1060,20 +1258,33 @@ class _RoundDetails extends StatelessWidget {
         : s.view.days == 1
             ? 'Result: ${prettySlot(o.winnerSlot!)}'
             : 'Meeting $round: ${prettySlot(o.winnerSlot!)}';
-    final ok = TextStyle(color: Colors.green.shade600);
-    final bad = TextStyle(color: theme.colorScheme.error);
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: ExpansionTile(
+    const ok = TextStyle(color: Maxi.ok, fontWeight: FontWeight.w700);
+    const bad = TextStyle(color: Maxi.bad, fontWeight: FontWeight.w700);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18, right: 6),
+      child: Sticker(
+        padding: EdgeInsets.zero,
+        shadow: 6,
+        child: Theme(
+          data: Maxi.onLight(theme),
+          child: ExpansionTile(
         initiallyExpanded: open,
-        title: Text(title),
-        trailing: Text(checksOut ? '✓ verified' : '✗ check failed', style: checksOut ? ok : bad),
+        title: Text(title, style: Maxi.display(14, Maxi.ink)),
+        trailing: checksOut
+            ? const Row(mainAxisSize: MainAxisSize.min, children: [
+                Animated(Motion.spin, child: Icon(Icons.verified, color: Maxi.ok)),
+                SizedBox(width: 4),
+                Text('verified', style: ok),
+              ])
+            : const Text('✗ check failed', style: bad),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
+              headingTextStyle: Maxi.display(10, Maxi.ink),
+              dataTextStyle: const TextStyle(color: Maxi.ink, fontWeight: FontWeight.w600),
               columnSpacing: 16,
               columns: [
                 const DataColumn(label: Text('')),
@@ -1108,11 +1319,13 @@ class _RoundDetails extends StatelessWidget {
             Text("✗ The server's pick for this round doesn't match these totals!", style: bad),
           const SizedBox(height: 4),
           switch (o.mine) {
-            true => Text('✓ Your ballot is on the board and was counted.', style: ok),
-            false => Text('✗ Your ballot is missing from the board!', style: bad),
+            true => const Text('✓ Your ballot is on the board and was counted.', style: ok),
+            false => const Text('✗ Your ballot is missing from the board!', style: bad),
             null => const Text("You didn't vote from this phone."),
           },
         ],
+          ),
+        ),
       ),
     );
   }
@@ -1146,20 +1359,49 @@ class _People extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final view = s.view;
-    return _Card(
-      title: 'People',
-      child: Column(
-        children: [
-          for (final (i, p) in view.participants.indexed)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              leading: Icon(Icons.circle, size: 10, color: p.online ? Colors.green : Theme.of(context).disabledColor),
-              title: Text('${p.name}${i == view.me ? ' (you)' : ''}${p.creator ? ' · creator' : ''}'),
-              subtitle: Text(_status(i, p)),
-              onLongPress: () => Clipboard.setData(ClipboardData(text: p.name)),
-            ),
-        ],
+    final online = view.participants.where((p) => p.online).length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, right: 6),
+      child: Sticker(
+        color: Maxi.pink,
+        tilt: -1,
+        shadow: 6,
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+        child: Theme(
+          data: Maxi.onLight(Theme.of(context)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                Expanded(child: Text('People', style: Maxi.display(18, Maxi.ink))),
+                Text('online ', style: Maxi.pixel(20, Maxi.ink)),
+                Lcd(online.toString().padLeft(3, '0')),
+              ]),
+              const SizedBox(height: 4),
+              for (final (i, p) in view.participants.indexed)
+                Container(
+                  decoration: const BoxDecoration(border: Border(top: BorderSide(color: Maxi.ink, width: 2))),
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    leading: StatusDot(online: p.online),
+                    minLeadingWidth: 14,
+                    title: Row(children: [
+                      Flexible(
+                        child: Text(
+                          '${p.name}${i == view.me ? ' (you)' : ''}',
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                        ),
+                      ),
+                      if (p.creator) ...[const SizedBox(width: 6), const Tag('Creator')],
+                    ]),
+                    subtitle: Text(_status(i, p), style: const TextStyle(color: Maxi.ink)),
+                    onLongPress: () => Clipboard.setData(ClipboardData(text: p.name)),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

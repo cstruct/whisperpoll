@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import 'maxi.dart';
 import 'model.dart';
 import 'poll_screen.dart' show prettySlot;
 import 'storage.dart';
@@ -139,14 +140,12 @@ class PollTile extends StatelessWidget {
     final yourTurn = status is Live && (status as Live).summary.yourTurn;
     return ListTile(
       enabled: status is! Expired,
-      title: Text(title),
+      title: Text(title, style: Maxi.display(15, theme.colorScheme.onSurface)),
       subtitle: DefaultTextStyle.merge(style: muted, child: subtitle),
       trailing: yourTurn
-          ? Chip(
-              label: const Text('Your turn'),
-              visualDensity: VisualDensity.compact,
-              backgroundColor: theme.colorScheme.primaryContainer,
-              side: BorderSide.none,
+          ? const Animated(
+              Motion.wiggle,
+              child: Tag('Your turn', color: Maxi.pink, textColor: Maxi.ink),
             )
           : const Icon(Icons.chevron_right),
       onTap: onOpen,
@@ -193,49 +192,60 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final polls = _polls;
     return Scaffold(
-      appBar: AppBar(title: const Text('Your polls')),
-      body: polls == null
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                    child: Text(
-                      polls.isEmpty
-                          ? 'No polls yet. Polls you create or join show up here.'
-                          : 'The server keeps a poll for a week after its last change. '
-                                'Swipe to remove one from this list.',
-                      style: TextStyle(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+      appBar: AppBar(title: const Text('~*~ your polls ~*~')),
+      body: Starfield(
+        child: Column(children: [
+          const Ticker("Every poll you've joined on this phone ★ kept for a week after the last change"),
+          Expanded(
+            child: polls == null
+                ? Center(child: Text('Loading…', style: Maxi.pixel(28, Maxi.lime)))
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+                      children: [
+                        Text('Your polls', style: Maxi.chroma(30)),
+                        const SizedBox(height: 10),
+                        Text(
+                          polls.isEmpty
+                              ? 'No polls yet. Polls you create or join show up here.'
+                              : 'The server keeps a poll for a week after its last change. '
+                                    'Swipe to remove one from this list.',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 18),
+                        if (polls.isNotEmpty)
+                          ZigCard(
+                            padding: const EdgeInsets.fromLTRB(4, 22, 4, 22),
+                            child: Column(children: [
+                              for (final (invite, status) in polls)
+                                Dismissible(
+                                  key: ValueKey(invite.key),
+                                  direction: DismissDirection.endToStart,
+                                  background: Container(
+                                    color: Maxi.orange,
+                                    alignment: Alignment.centerRight,
+                                    padding: const EdgeInsets.only(right: 16),
+                                    child: const Icon(Icons.delete_outline, color: Maxi.ink),
+                                  ),
+                                  onDismissed: (_) => _remove(invite),
+                                  child: PollTile(
+                                    invite: invite,
+                                    status: status,
+                                    onOpen: () => widget.onOpen(invite),
+                                  ),
+                                ),
+                            ]),
+                          ),
+                        const Badges(),
+                      ],
                     ),
                   ),
-                  for (final (invite, status) in polls)
-                    Dismissible(
-                      key: ValueKey(invite.key),
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        color: theme.colorScheme.errorContainer,
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 16),
-                        child: const Icon(Icons.delete_outline),
-                      ),
-                      onDismissed: (_) => _remove(invite),
-                      child: PollTile(
-                        invite: invite,
-                        status: status,
-                        onOpen: () => widget.onOpen(invite),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+          ),
+        ]),
+      ),
     );
   }
 }

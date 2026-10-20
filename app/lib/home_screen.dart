@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'history.dart';
+import 'maxi.dart';
 import 'storage.dart';
 
 const defaultServer = 'https://whisperpoll.fly.dev';
@@ -101,120 +102,119 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final polls = _polls;
     final running = [for (final p in polls ?? <(Invite, PollStatus)>[]) if (p.$2.running) p];
     return Scaffold(
-      appBar: AppBar(title: const Text('whisperpoll')),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Text(
-              'Find a day that works — with votes nobody can read, not even the server, '
-              'and a result everyone can check.',
-              style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 16),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
-              ),
-            if (polls != null && polls.isNotEmpty)
-              Card(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ListTile(
-                      title: const Text('Running polls'),
-                      trailing: TextButton(
-                        onPressed: _openHistory,
-                        child: const Text('All your polls'),
+      appBar: AppBar(title: const Text('~*~ whisperpoll ~*~')),
+      body: Starfield(
+        child: Column(children: [
+          const Ticker('Votes nobody can read ★ not even the server ★ a result everyone can check'),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+                children: [
+                  Text('Find a time that works', style: Maxi.chroma(30)),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'With votes nobody can read, not even the server, and a result everyone can check.',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 20),
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16, right: 4),
+                      child: Sticker(
+                        color: Maxi.orange,
+                        child: Text(_error!, style: const TextStyle(color: Maxi.ink, fontWeight: FontWeight.w700)),
                       ),
                     ),
-                    if (running.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        child: Text(
-                          'Nothing running right now.',
-                          style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-                        ),
-                      ),
-                    for (final (invite, status) in running)
-                      PollTile(invite: invite, status: status, onOpen: () => _open(invite)),
-                  ],
-                ),
-              ),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('Join with an invite link', style: theme.textTheme.titleMedium),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _link,
-                      decoration: const InputDecoration(
-                        hintText: 'https://…/p/…?t=…',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.url,
-                      onSubmitted: (_) => _join(),
-                    ),
-                    const SizedBox(height: 12),
-                    FilledButton.tonal(onPressed: _join, child: const Text('Join')),
-                  ],
-                ),
-              ),
-            ),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('Start a poll', style: theme.textTheme.titleMedium),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _title,
-                      decoration: const InputDecoration(
-                        labelText: 'What are you planning?',
-                        hintText: 'Team dinner',
-                        border: OutlineInputBorder(),
+                  if (polls != null && polls.isNotEmpty)
+                    ZigCard(
+                      title: 'Running polls',
+                      icon: const SpinningStar(size: 24),
+                      trailing: TextButton(onPressed: _openHistory, child: const Text('All your polls')),
+                      padding: const EdgeInsets.fromLTRB(10, 26, 10, 22),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (running.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 8),
+                              child: Text('Nothing running right now.'),
+                            ),
+                          for (final (invite, status) in running)
+                            PollTile(invite: invite, status: status, onOpen: () => _open(invite)),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _name,
-                      decoration: const InputDecoration(
-                        labelText: 'Your name',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      title: const Text('Server'),
+                  ZigCard(
+                    title: 'Join with an invite link',
+                    color: Maxi.yellow,
+                    icon: const Animated(Motion.bob, child: Icon(Icons.mail_outline, size: 28)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         TextField(
-                          controller: _server,
+                          controller: _link,
+                          decoration: const InputDecoration(hintText: 'https://…/p/…?t=…'),
+                          style: Maxi.pixel(22, Maxi.ink),
                           keyboardType: TextInputType.url,
-                          decoration: const InputDecoration(border: OutlineInputBorder()),
+                          onSubmitted: (_) => _join(),
+                        ),
+                        const SizedBox(height: 14),
+                        Pop(color: Maxi.cyan, child: FilledButton(onPressed: _join, child: const Text('Join'))),
+                      ],
+                    ),
+                  ),
+                  ZigCard(
+                    title: 'Start a poll',
+                    color: Maxi.pink,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          controller: _title,
+                          style: Maxi.pixel(22, Maxi.ink),
+                          decoration: const InputDecoration(
+                            labelText: 'What are you planning?',
+                            hintText: 'Team dinner',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _name,
+                          style: Maxi.pixel(22, Maxi.ink),
+                          decoration: const InputDecoration(labelText: 'Your name'),
+                        ),
+                        ExpansionTile(
+                          tilePadding: EdgeInsets.zero,
+                          title: Text('Server', style: Maxi.display(12, Maxi.ink)),
+                          children: [
+                            TextField(
+                              controller: _server,
+                              style: Maxi.pixel(22, Maxi.ink),
+                              keyboardType: TextInputType.url,
+                            ),
+                          ],
+                        ),
+                        Pop(
+                          color: Maxi.cyan,
+                          child: FilledButton(
+                            onPressed: _busy ? null : _create,
+                            child: const Text('Create poll'),
+                          ),
                         ),
                       ],
                     ),
-                    FilledButton(
-                      onPressed: _busy ? null : _create,
-                      child: const Text('Create poll'),
-                    ),
-                  ],
-                ),
+                  ),
+                  const Badges(),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ]),
       ),
     );
   }

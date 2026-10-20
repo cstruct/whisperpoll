@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use whisperpoll_protocol::{Phase, PollSummary};
 
+use crate::deco::{Badges, Ticker};
 use crate::store::{self, Visited};
 use crate::util::pretty_slot;
 
@@ -195,10 +196,11 @@ fn live_details(s: &PollSummary) -> AnyView {
 pub fn History() -> impl IntoView {
     view! {
         <main class="page narrow">
+            <Ticker text="EVERY POLL YOU'VE OPENED IN THIS BROWSER ★ KEPT FOR A WEEK AFTER THE LAST CHANGE".to_string() />
             <header class="poll-header">
                 <div>
                     <nav class="crumbs">
-                        <a class="brand" href="/">"whisperpoll"</a>
+                        <a class="brand" href="/">"~*~ whisperpoll ~*~"</a>
                     </nav>
                     <h1>"Your polls"</h1>
                 </div>
@@ -209,6 +211,7 @@ pub fn History() -> impl IntoView {
                 </p>
                 <PollList running_only=false />
             </section>
+            <Badges />
         </main>
     }
 }

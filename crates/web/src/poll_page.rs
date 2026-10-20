@@ -10,6 +10,7 @@ use whisperpoll_protocol::client::{finished_outcomes, Outcome};
 use whisperpoll_protocol::slot::Slot;
 use whisperpoll_protocol::{ClientMsg, Phase, PollView, TIERS};
 
+use crate::deco::{Arrow, Badges, Calendar, Clock, Envelope, Lock, Star, Ticker};
 use crate::net::{self, Conn};
 use crate::{auto, store, util};
 
@@ -61,8 +62,23 @@ pub fn PollPage(id: String, token: String) -> impl IntoView {
         }
     });
 
+    let ticker = Signal::derive(move || {
+        match phase.get() {
+            Some(Phase::Inviting) => "EVERYONE GETS THEIR OWN LINK ★ SEND IT PRIVATELY ★ NEXT UP: SUGGEST TIMES",
+            Some(Phase::Gathering) => "ANYONE CAN ADD A TIME ★ THE LIST LOCKS WHEN VOTING OPENS",
+            Some(Phase::KeyCeremony) => "BUILDING A KEY NOBODY HOLDS ALONE ★ HANG TIGHT",
+            Some(Phase::Voting) => "YOUR BALLOT IS ENCRYPTED BEFORE IT LEAVES ★ NOBODY CAN READ IT ★ NOT EVEN THE SERVER",
+            Some(Phase::Tallying) => "ONLY THE TOTAL GETS DECRYPTED ★ ALMOST THERE",
+            Some(Phase::Done) => "WE HAVE A RESULT ★ CHECKED IN YOUR BROWSER ★ PROOFS INCLUDED",
+            Some(Phase::Failed { .. }) => "SOMETHING WENT WRONG",
+            None => "VOTES NOBODY CAN READ ★ NOT EVEN THE SERVER",
+        }
+        .to_string()
+    });
+
     view! {
         <main class="page">
+            <Ticker text=ticker />
             <Header />
             <ErrorBanner />
             // If the poll vanishes after we've seen it, keep showing what we
@@ -102,6 +118,7 @@ pub fn PollPage(id: String, token: String) -> impl IntoView {
                     </div>
                 </Show>
             </Show>
+            <Badges />
         </main>
     }
 }
@@ -128,7 +145,7 @@ fn Header() -> impl IntoView {
         <header class="poll-header">
             <div>
                 <nav class="crumbs">
-                    <a class="brand" href="/">"whisperpoll"</a>
+                    <a class="brand" href="/">"~*~ whisperpoll ~*~"</a>
                     <a href="/history">"Your polls"</a>
                 </nav>
                 <h1>{title}</h1>
@@ -187,7 +204,12 @@ fn Steps() -> impl IntoView {
                 .enumerate()
                 .map(|(i, label)| {
                     view! {
-                        <li class:done=move || i < current() class:current=move || i == current()>
+                        <li
+                            class:done=move || i < current()
+                            class:current=move || i == current()
+                            aria-current=move || (i == current()).then_some("step")
+                        >
+                            <Star />
                             <span class="num">{i + 1}</span>
                             {label}
                         </li>
@@ -256,7 +278,15 @@ fn Participants() -> impl IntoView {
     };
     view! {
         <aside class="card people">
-            <h2>"People"</h2>
+            <h2>
+                "People"
+                <span class="online-count">
+                    "online"
+                    <span class="lcd">
+                        {move || format!("{:03}", rows().iter().filter(|r| r.2).count())}
+                    </span>
+                </span>
+            </h2>
             <ul>
                 {move || {
                     rows()
@@ -323,7 +353,7 @@ fn Gathering() -> impl IntoView {
 
     view! {
         <div class="card stack">
-            <h2>"Suggest times"</h2>
+            <h2><Clock />"Suggest times"</h2>
             <p class="muted">"Anyone can add a time. The list is locked when voting opens."</p>
             <ul class="dates">
                 {move || {
@@ -454,6 +484,7 @@ fn Inviting() -> impl IntoView {
                 </p>
                 <button on:click=move |_| net::send(&ClientMsg::FinishInviting)>
                     "Next: suggest times"
+                    <Arrow />
                 </button>
             </div>
         </Show>
@@ -490,7 +521,7 @@ fn Invites() -> impl IntoView {
     };
     view! {
         <div class="card stack">
-            <h2>"Invite people"</h2>
+            <h2><Envelope />"Invite people"</h2>
             <p class="muted">"Each person gets their own link. Send it to them privately."</p>
             <form class="row" on:submit=invite>
                 <input
@@ -625,6 +656,7 @@ fn StartCeremony() -> impl IntoView {
             </p>
             <button on:click=start disabled=move || !has_dates() || registered() == 0>
                 "Lock times & open voting"
+                <Arrow />
             </button>
         </div>
     }
@@ -848,6 +880,8 @@ fn Voting() -> impl IntoView {
                                 view! {
                                     <button
                                         type="button"
+                                        class=format!("t{t}")
+                                        aria-pressed=move || choices.with(|c| (c[i] == value).to_string())
                                         class:on=move || choices.with(|c| c[i] == value)
                                         class:cant=value.is_none()
                                         on:click=move |_| choices.update(|c| c[i] = value)
@@ -869,13 +903,16 @@ fn Voting() -> impl IntoView {
                 .collect_view();
             view! {
                 <div class="card stack">
-                    <h2>{heading.clone()}</h2>
+                    <h2><Lock />{heading.clone()}</h2>
                     <p class="muted">
                         "Your choices are encrypted here, with proofs that they're well-formed. Nobody — not the server, not any single trustee — can read them."
                     </p>
                     <div class="ballot">{rows}</div>
                     <div class="row">
-                        <button on:click=submit>"Cast encrypted vote"</button>
+                        <button on:click=submit>
+                            <Lock class="icon wiggle" fill="none" stroke="currentColor" />
+                            "Cast encrypted vote"
+                        </button>
                         <Show when=move || editing.get()>
                             <button class="secondary" on:click=move |_| editing.set(false)>
                                 "Cancel"
@@ -1176,6 +1213,7 @@ fn CalendarExport(outcomes: Vec<Outcome>) -> impl IntoView {
     view! {
         <div class="row calendar">
             <button class="secondary small" on:click=download>
+                <Calendar />
                 {label}
             </button>
             {google}

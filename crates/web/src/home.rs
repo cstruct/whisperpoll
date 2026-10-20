@@ -3,6 +3,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use whisperpoll_protocol::{CreatePoll, Created};
 
+use crate::deco::{Badges, Ticker};
 use crate::history::PollList;
 use crate::store;
 
@@ -55,8 +56,9 @@ pub fn Home() -> impl IntoView {
 
     view! {
         <main class="page narrow">
+            <Ticker text="VOTES NOBODY CAN READ ★ NOT EVEN THE SERVER ★ A RESULT EVERYONE CAN CHECK".to_string() />
             <header class="hero">
-                <h1>"whisperpoll"</h1>
+                <h1>"~*~ whisperpoll ~*~"</h1>
                 <p class="lede">
                     "Find a day that works — with votes nobody can read, not even the server, "
                     "and a result everyone can check."
@@ -103,6 +105,7 @@ pub fn Home() -> impl IntoView {
                 <li><strong>"Vote"</strong>" — rate each day; ballots are encrypted in your browser."</li>
                 <li><strong>"Tally"</strong>" — only the total is decrypted, with proofs anyone can check."</li>
             </ol>
+            <Badges />
         </main>
     }
 }

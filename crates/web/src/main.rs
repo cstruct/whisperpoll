@@ -2,6 +2,7 @@
 //! leave the browser, and every result is re-verified locally.
 
 mod auto;
+mod deco;
 mod history;
 mod home;
 mod net;

@@ -4,6 +4,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
 import 'home_screen.dart';
+import 'maxi.dart';
 import 'poll_screen.dart';
 import 'push.dart';
 import 'src/rust/frb_generated.dart';
@@ -68,16 +69,10 @@ class _WhisperpollAppState extends State<WhisperpollApp> {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Color(0xFF3B5BDB);
     return MaterialApp(
       title: 'whisperpoll',
       navigatorKey: _navigator,
-      theme: ThemeData(colorSchemeSeed: seed, useMaterial3: true),
-      darkTheme: ThemeData(
-        colorSchemeSeed: seed,
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
+      theme: Maxi.theme(),
       home: HomeScreen(onOpen: openInvite),
     );
   }
