@@ -46,6 +46,8 @@
 	<string>To add the days your poll picked to your calendar.</string>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>To add the days your poll picked to your calendar.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>The camera scans whisperpoll QR codes, so you can join a poll you are invited to. Nothing is recorded or sent anywhere.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

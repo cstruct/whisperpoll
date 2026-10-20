@@ -8,6 +8,7 @@ import 'history.dart';
 import 'join.dart';
 import 'maxi.dart';
 import 'muzak.dart';
+import 'scan.dart';
 import 'storage.dart';
 
 const defaultServer = 'https://whisperpoll.fly.dev';
@@ -78,6 +79,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _link.clear();
     setState(() => _error = null);
     await _open(invite);
+  }
+
+  /// Scans a QR code and joins with it like a pasted link.
+  Future<void> _scan() async {
+    final link = await ScanScreen.open(context);
+    if (link == null || !mounted) return;
+    _link.text = link;
+    await _join();
   }
 
   Future<void> _create() async {
@@ -178,6 +187,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(height: 14),
                         Pop(color: Maxi.cyan, child: FilledButton(onPressed: _join, child: const Text('Join'))),
+                        const SizedBox(height: 14),
+                        Pop(
+                          color: Maxi.ink,
+                          child: OutlinedButton.icon(
+                            onPressed: _scan,
+                            icon: const Animated(Motion.pulse, child: Icon(Icons.qr_code_scanner)),
+                            label: const Text('Scan QR code'),
+                          ),
+                        ),
                       ],
                     ),
                   ),
